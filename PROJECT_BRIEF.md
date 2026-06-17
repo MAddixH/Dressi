@@ -1210,3 +1210,84 @@ The final MVP should feel like a polished fashion-tech app where:
 
 The app should not feel like a basic clothing store.
 It should feel like a visual outfit inspiration platform with shopping built directly into the experience.
+
+CRITICAL COMMERCE FEATURE: ONE-CHECKOUT MULTI-RETAILER PURCHASING
+
+Dressi must allow users to purchase an entire outfit through one simple Dressi checkout, even if the items come from multiple different brands or retailers.
+
+Example:
+An outfit may include:
+
+* Nike shoes from Nike
+* Zara pants from Zara
+* Ralph Lauren sweater from Ralph Lauren
+* Sunglasses from Amazon
+* Watch from another retailer
+
+The user should not have to manually visit each website separately.
+
+Required user flow:
+User taps “Buy Entire Outfit”
+→ Dressi shows all items included
+→ user selects size/color for each item
+→ user taps “Add All to Bag”
+→ user checks out once inside Dressi
+→ Dressi automatically handles purchasing/fulfillment through multiple verified retail partners behind the scenes.
+
+Important UI language:
+
+* “One checkout. Every item.”
+* “Dressi handles the rest.”
+* “Items may ship from multiple verified retail partners.”
+* “Track everything in one place.”
+
+Build the app architecture so this can eventually support:
+
+* Retailer API checkout integrations
+* Affiliate checkout links
+* Dropship/partner fulfillment
+* Manual order routing
+* Automated purchasing workflows
+* Multi-retailer order splitting
+* Centralized order tracking
+
+For MVP, if real retailer checkout APIs are not available yet, simulate this process with:
+
+* Unified Dressi bag
+* Unified checkout page
+* Internal order record
+* Retailer/source field per item
+* Order status per item
+* Message that items are fulfilled by verified retail partners
+
+The backend should structure each order as one parent Dressi order with multiple child order items, each connected to a different retailer.
+
+Example database structure:
+Order:
+
+* id
+* user_id
+* Dressi order number
+* subtotal
+* shipping
+* tax
+* service fee
+* total
+* overall status
+
+OrderItems:
+
+* order_id
+* product_id
+* retailer
+* brand
+* affiliate_url or retailer_api_endpoint
+* size
+* color
+* quantity
+* price
+* fulfillment_status
+* tracking_number
+* retailer_order_reference
+
+The goal is that the customer experiences one simple Dressi checkout, while Dressi manages the complexity of buying from multiple suppliers/retailers in the background.
