@@ -2707,6 +2707,103 @@ textarea {
   line-height: 1.55;
 }
 
+.creator-profile-editor {
+  padding-bottom: 20px;
+}
+
+.profile-editor-intro {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.profile-editor-intro > div {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-editor-intro h1 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.28rem;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.profile-editor-intro p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.avatar-editor {
+  position: relative;
+  display: block;
+  width: 92px;
+  height: 106px;
+  overflow: hidden;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #111;
+}
+
+.avatar-editor img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-editor span {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  left: 5px;
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 6px;
+  color: #111;
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 0.58rem;
+  font-weight: 900;
+}
+
+.avatar-editor input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.username-field {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.username-field span {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.username-field input {
+  border: 0;
+  border-radius: 0;
+}
+
 .creator-gate > span {
   display: grid;
   width: 62px;

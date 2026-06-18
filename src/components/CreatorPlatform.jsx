@@ -17,6 +17,7 @@ import {
   Play,
   Plus,
   Search,
+  Save,
   ShoppingBag,
   Sparkles,
   Trash2,
@@ -521,7 +522,7 @@ export function CreatorUpload({ creator, accountType, isPublishing = false, onUp
   );
 }
 
-export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onSignOut, isAuthenticated = true, onAuthenticate }) {
+export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onEditCreator, onSignOut, isAuthenticated = true, onAuthenticate }) {
   if (!isAuthenticated) {
     return (
       <section className="guest-account">
@@ -544,6 +545,7 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
       {accountType === 'creator' ? (
         <section className="profile-command-list">
           <button onClick={() => onOpenCreator(creator.username)} type="button"><Users size={19} /><span><strong>View creator profile</strong><small>See your public profile and posts</small></span><ChevronRight size={18} /></button>
+          <button onClick={onEditCreator} type="button"><UserPlus size={19} /><span><strong>Edit creator profile</strong><small>Update your username, bio, photo, and links</small></span><ChevronRight size={18} /></button>
           <button onClick={onUpload} type="button"><Upload size={19} /><span><strong>Upload fit check</strong><small>Share a photo, video, or carousel</small></span><ChevronRight size={18} /></button>
           <button onClick={onDiscover} type="button"><Search size={19} /><span><strong>Discover creators</strong><small>Find style communities to follow</small></span><ChevronRight size={18} /></button>
         </section>
@@ -556,5 +558,67 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
         {onSignOut && <button onClick={onSignOut} type="button"><LogOut size={19} /><span><strong>Log out</strong><small>Sign out of this Dressi account</small></span><ChevronRight size={18} /></button>}
       </section>
     </section>
+  );
+}
+
+export function CreatorProfileEditor({ creator, isSaving, onSave, onCancel }) {
+  const [displayName, setDisplayName] = useState(creator.displayName);
+  const [username, setUsername] = useState(creator.username);
+  const [bio, setBio] = useState(creator.bio || '');
+  const [location, setLocation] = useState(creator.location || '');
+  const [styleTags, setStyleTags] = useState((creator.tags || []).join(', '));
+  const [instagram, setInstagram] = useState(creator.socialLinks?.instagram || '');
+  const [website, setWebsite] = useState(creator.socialLinks?.website || '');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(creator.avatar);
+  const [error, setError] = useState('');
+
+  function submit(event) {
+    event.preventDefault();
+    const cleanUsername = username.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (cleanUsername.length < 3 || !displayName.trim() || !bio.trim()) {
+      setError('Add a display name, bio, and username with at least 3 characters.');
+      return;
+    }
+    setError('');
+    onSave({
+      displayName: displayName.trim(),
+      username: cleanUsername,
+      bio: bio.trim(),
+      location: location.trim(),
+      avatarUrl: creator.avatar,
+      styleCategories: styleTags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      socialLinks: { instagram: instagram.trim(), website: website.trim() },
+    }, avatarFile);
+  }
+
+  return (
+    <form className="page-stack creator-profile-editor" onSubmit={submit}>
+      <section className="profile-editor-intro">
+        <label className="avatar-editor">
+          <img src={avatarPreview} alt="Creator profile preview" />
+          <span><Camera size={16} /> Change photo</span>
+          <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; setAvatarFile(file); setAvatarPreview(URL.createObjectURL(file)); }} />
+        </label>
+        <div><p className="eyebrow">Public creator profile</p><h1>Make it unmistakably yours.</h1><p>This is how shoppers and other creators will find you.</p></div>
+      </section>
+      <section className="upload-form-section">
+        <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label>
+        <label>Username<div className="username-field"><span>@</span><input value={username} onChange={(event) => setUsername(event.target.value)} pattern="[A-Za-z0-9_]{3,24}" required /></div></label>
+        <label>Bio<textarea value={bio} onChange={(event) => setBio(event.target.value)} rows="4" maxLength="220" required /></label>
+        <label>Location<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Chicago, IL" /></label>
+        <label>Style categories<input value={styleTags} onChange={(event) => setStyleTags(event.target.value)} placeholder="Minimalist, Business Casual, Date Night" /></label>
+      </section>
+      <section className="upload-form-section">
+        <h2>Social links</h2>
+        <label>Instagram<input value={instagram} onChange={(event) => setInstagram(event.target.value)} placeholder="@yourhandle" /></label>
+        <label>Website<input value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://your-site.com" /></label>
+      </section>
+      {error && <div className="inline-notice error">{error}</div>}
+      <div className="stacked-actions">
+        <button className="primary-button full" type="submit" disabled={isSaving}><Save size={17} /> {isSaving ? 'Saving profile...' : 'Save Profile'}</button>
+        <button className="secondary-button full" onClick={onCancel} type="button" disabled={isSaving}>Cancel</button>
+      </div>
+    </form>
   );
 }

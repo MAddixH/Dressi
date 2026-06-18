@@ -108,6 +108,38 @@ export async function upgradeAccountToCreator(userId, profile = {}) {
   );
 }
 
+export async function updateCreatorProfile({ userId, creatorId, fields, avatarFile = null }) {
+  const client = requireSupabase();
+  let avatarUrl = fields.avatarUrl || null;
+  if (avatarFile) {
+    const [uploadedAvatar] = await uploadMediaFiles(userId, [avatarFile]);
+    avatarUrl = uploadedAvatar.media_url;
+  }
+
+  assertResult(
+    await client.from('profiles').update({
+      display_name: fields.displayName,
+      avatar_url: avatarUrl,
+      updated_at: new Date().toISOString(),
+    }).eq('id', userId),
+    'Update account profile',
+  );
+
+  return assertResult(
+    await client.from('creator_profiles').update({
+      username: safeUsername(fields.username),
+      display_name: fields.displayName,
+      avatar_url: avatarUrl,
+      bio: fields.bio,
+      location: fields.location || null,
+      style_categories: fields.styleCategories,
+      social_links: fields.socialLinks,
+      updated_at: new Date().toISOString(),
+    }).eq('id', creatorId).eq('user_id', userId).select().single(),
+    'Update creator profile',
+  );
+}
+
 export async function loadCreatorPlatform(userId = null) {
   const client = requireSupabase();
   const [creatorResult, profileResult, postResult, mediaResult, productLinkResult, productResult, followResult, saveResult, outfitSaveResult] = await Promise.all([

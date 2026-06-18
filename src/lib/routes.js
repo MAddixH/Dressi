@@ -3,6 +3,7 @@ export const ROUTES = {
   search: '/search',
   saved: '/saved',
   profile: '/profile',
+  'creator-settings': '/profile/creator',
   creators: '/creators',
   upload: '/creator/upload',
   bag: '/bag',
@@ -22,6 +23,7 @@ export function buildPath(route, context = {}) {
 
 export function parsePath(pathname) {
   const parts = pathname.split('/').filter(Boolean);
+  if (parts[0] === 'profile' && parts[1] === 'creator') return { route: 'creator-settings' };
   if (parts[0] === 'creator' && parts[1] === 'upload') return { route: 'upload' };
   if (parts[0] === 'creator' && parts[1] && parts[2] === 'closet') {
     return { route: 'closet', username: parts[1] };

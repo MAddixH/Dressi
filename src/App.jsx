@@ -36,6 +36,7 @@ import {
   CreatorDiscovery,
   CreatorFeedCard,
   CreatorProfile,
+  CreatorProfileEditor,
   CreatorUpload,
   FitCheckDetail,
   RecreateThisFit,
@@ -56,6 +57,7 @@ import {
   signOut,
   signUp,
   upgradeAccountToCreator,
+  updateCreatorProfile,
 } from './services/dressiApi.js';
 
 const currency = new Intl.NumberFormat('en-US', {
@@ -116,6 +118,7 @@ function App() {
   const [appNotice, setAppNotice] = useState('');
   const [authFeedback, setAuthFeedback] = useState({ error: '', message: '', loading: false });
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [onboardingAnswers, setOnboardingAnswers] = useState({
     preference: 'All',
     budget: 'Mixed',
@@ -245,6 +248,14 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  useEffect(() => {
+    if (route === 'creator-settings' && isSupabaseConfigured && backendState !== 'loading' && !session) {
+      setAuthMode('log-in');
+      setAuthFeedback({ error: '', message: 'Log in to edit your creator profile.', loading: false });
+      setStage('auth');
+    }
+  }, [backendState, route, session]);
+
   function navigate(nextRoute, context = {}, replace = false) {
     const nextContext = {
       outfitId: context.outfitId ?? selectedOutfitId,
@@ -267,6 +278,8 @@ function App() {
       navigate('creator', { username: selectedPost.creatorUsername });
     } else if (route === 'closet') {
       navigate('creator', { username: selectedCreatorUsername });
+    } else if (route === 'creator-settings') {
+      navigate('profile');
     } else if (route === 'items') {
       navigate('detail', { outfitId: selectedOutfitId });
     } else {
@@ -433,6 +446,26 @@ function App() {
     setAccountType('shopper');
     setStage('splash');
     window.history.replaceState({}, '', '/');
+  }
+
+  async function handleCreatorProfileSave(fields, avatarFile) {
+    if (!session || !account?.creator) return;
+    setIsSavingProfile(true);
+    try {
+      await updateCreatorProfile({
+        userId: session.user.id,
+        creatorId: account.creator.id,
+        fields,
+        avatarFile,
+      });
+      await refreshBackendData(session);
+      setAppNotice('Creator profile saved.');
+      navigate('profile');
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setIsSavingProfile(false);
+    }
   }
 
   function openCreator(username) {
@@ -675,12 +708,21 @@ function App() {
             onOpenCreator={openCreator}
             onUpload={() => navigate('upload')}
             onDiscover={() => navigate('creators')}
+            onEditCreator={() => navigate('creator-settings')}
             onSignOut={session ? handleSignOut : null}
             isAuthenticated={!isSupabaseConfigured || Boolean(session)}
             onAuthenticate={() => {
               setAuthMode('sign-up');
               setStage('auth');
             }}
+          />
+        )}
+        {route === 'creator-settings' && (
+          <CreatorProfileEditor
+            creator={accountCreator}
+            isSaving={isSavingProfile}
+            onSave={handleCreatorProfileSave}
+            onCancel={() => navigate('profile')}
           />
         )}
       </main>
@@ -871,7 +913,7 @@ function Onboarding({ answers, setAnswers, onComplete }) {
 }
 
 function AppHeader({ route, onBack, onOpenBag, bagCount }) {
-  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators'];
+  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators', 'creator-settings'];
   const titles = {
     home: '',
     search: 'Search',
@@ -888,6 +930,7 @@ function AppHeader({ route, onBack, onOpenBag, bagCount }) {
     closet: 'Creator Closet',
     upload: 'Create',
     profile: 'Profile',
+    'creator-settings': 'Edit Creator Profile',
   };
 
   return (
@@ -1614,7 +1657,7 @@ function BottomNav({ route, navigate }) {
   ];
   const activeRoute = route === 'creators' ? 'search'
     : ['creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet'].includes(route) ? 'home'
-      : route;
+      : route === 'creator-settings' ? 'profile' : route;
 
   return (
     <nav className="bottom-nav" aria-label="Primary">
