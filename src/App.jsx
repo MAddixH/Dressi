@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BadgeCheck,
+  Bell,
+  Bookmark,
   CheckCircle2,
   ChevronRight,
   CreditCard,
@@ -17,6 +19,7 @@ import {
   Sparkles,
   Trash2,
   Truck,
+  UserRound,
 } from 'lucide-react';
 import {
   onboardingQuestions,
@@ -41,9 +44,23 @@ function getItemsTotal(items) {
 
 function LogoMark({ compact = false }) {
   return (
-    <div className={compact ? 'logo logo-compact' : 'logo'} aria-label="Dressi">
-      <span>D</span>
-      <i />
+    <img
+      className={compact ? 'logo logo-compact' : 'logo'}
+      src="/assets/dressi-icon.png"
+      alt="Dressi"
+    />
+  );
+}
+
+function LogoWordmark() {
+  return <img className="wordmark" src="/assets/dressi-wordmark.png" alt="Dressi" />;
+}
+
+function StatusBar({ dark = false }) {
+  return (
+    <div className={dark ? 'status-bar dark' : 'status-bar'} aria-hidden="true">
+      <span>9:41</span>
+      <span />
     </div>
   );
 }
@@ -120,7 +137,12 @@ function App() {
   }
 
   if (stage === 'splash') {
-    return <SplashScreen onStart={() => setStage('auth')} onGuest={() => setStage('onboarding')} />;
+    return (
+      <SplashScreen
+        onStart={() => setStage('onboarding')}
+        onLogin={() => setStage('auth')}
+      />
+    );
   }
 
   if (stage === 'auth') {
@@ -219,25 +241,32 @@ function App() {
   );
 }
 
-function SplashScreen({ onStart, onGuest }) {
+function SplashScreen({ onStart, onLogin }) {
+  const splashImages = ['/assets/old-money-collage.png', ...outfits.slice(1, 5).map((outfit) => outfit.image)];
+
   return (
     <main className="auth-shell splash-screen">
+      <StatusBar dark />
       <section className="hero-panel">
-        <div className="hero-image" />
-        <div className="hero-overlay">
-          <LogoMark />
-          <p className="eyebrow">Outfit Inspo & Shop AI App</p>
-          <h1>Dressi</h1>
+        <LogoMark compact />
+        <div className="hero-copyblock">
+          <h1>Find your vibe. Shop the look.</h1>
           <p className="hero-copy">
-            Discover complete outfits made for your vibe, then shop every item in one simple
-            checkout.
+            AI-powered outfit inspiration tailored to you.
           </p>
+        </div>
+        <div className="hero-collage" aria-hidden="true">
+          {splashImages.map((image) => (
+            <img src={image} alt="" key={image} />
+          ))}
+        </div>
+        <div className="hero-overlay">
           <div className="hero-actions">
-            <button className="primary-button" onClick={onStart}>
-              Start styling <ChevronRight size={18} />
+            <button className="primary-button inverse" onClick={onStart}>
+              Get Started <ChevronRight size={18} />
             </button>
-            <button className="secondary-button light" onClick={onGuest}>
-              Continue as guest
+            <button className="text-button light" onClick={onLogin}>
+              Already have an account? <span>Log in</span>
             </button>
           </div>
         </div>
@@ -251,11 +280,12 @@ function AuthScreen({ mode, setMode, onContinue, onBack }) {
 
   return (
     <main className="auth-shell auth-screen">
+      <StatusBar />
       <button className="icon-button floating-back" onClick={onBack} aria-label="Back to welcome">
         <ArrowLeft size={19} />
       </button>
       <section className="auth-card">
-        <LogoMark compact />
+        <LogoWordmark />
         <div>
           <p className="eyebrow">Welcome to Dressi</p>
           <h1>{isSignUp ? 'Create your style profile.' : 'Log back in.'}</h1>
@@ -289,7 +319,7 @@ function AuthScreen({ mode, setMode, onContinue, onBack }) {
           </label>
           <label>
             Password
-            <input type="password" placeholder="••••••••" />
+            <input type="password" placeholder="Password" />
           </label>
           <div className="auth-note">
             <ShieldCheck size={16} />
@@ -313,10 +343,6 @@ function AuthScreen({ mode, setMode, onContinue, onBack }) {
 }
 
 function Onboarding({ answers, setAnswers, onComplete }) {
-  function selectAnswer(questionId, value) {
-    setAnswers((current) => ({ ...current, [questionId]: value }));
-  }
-
   function toggleList(key, value) {
     setAnswers((current) => {
       const next = current[key].includes(value)
@@ -328,71 +354,38 @@ function Onboarding({ answers, setAnswers, onComplete }) {
 
   return (
     <main className="auth-shell onboarding-screen">
+      <StatusBar />
       <section className="onboarding-card">
-        <div className="onboarding-top">
-          <LogoMark compact />
-          <div>
-            <p className="eyebrow">Style quiz</p>
-            <h1>Personalize your first feed.</h1>
+        <div className="onboarding-nav">
+          <button className="nav-icon-button" type="button" aria-label="Back">
+            <ArrowLeft size={18} />
+          </button>
+          <div className="step-dashes" aria-hidden="true">
+            <span />
+            <span />
+            <span />
           </div>
         </div>
-        <div className="progress-track">
-          <span style={{ width: '72%' }} />
-        </div>
-        {onboardingQuestions.map((question) => (
-          <section className="quiz-section" key={question.id}>
-            <h2>{question.title}</h2>
-            <p>{question.subtitle}</p>
-            <div className="chip-grid">
-              {question.options.map((option) => (
-                <button
-                  className={answers[question.id] === option ? 'chip selected' : 'chip'}
-                  key={option}
-                  onClick={() => selectAnswer(question.id, option)}
-                  type="button"
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
-        <section className="quiz-section">
-          <h2>Pick style signals.</h2>
-          <p>Choose a few aesthetics so Dressi can shape your For You feed.</p>
-          <div className="chip-grid">
-            {styleOptions.slice(0, 12).map((style) => (
-              <button
-                className={answers.styles.includes(style) ? 'chip selected' : 'chip'}
-                key={style}
-                onClick={() => toggleList('styles', style)}
-                type="button"
-              >
-                {style}
-              </button>
-            ))}
-          </div>
+        <section className="style-vibe-copy">
+          <h1>What's your style vibe?</h1>
+          <p>Choose all that inspire you</p>
         </section>
-        <section className="quiz-section">
-          <h2>Color palette</h2>
-          <p>Color is flexible. This just gives Dressi a tasteful starting point.</p>
-          <div className="chip-grid">
-            {['Neutrals', 'Dark tones', 'Earth tones', 'Bold colors', 'Pastels', 'Monochrome'].map(
-              (color) => (
-                <button
-                  className={answers.colors.includes(color) ? 'chip selected' : 'chip'}
-                  key={color}
-                  onClick={() => toggleList('colors', color)}
-                  type="button"
-                >
-                  {color}
-                </button>
-              ),
-            )}
-          </div>
+        <section className="style-choice-grid">
+          {styleCards.slice(0, 6).map((style) => (
+            <button
+              className={answers.styles.includes(style.title) ? 'style-choice selected' : 'style-choice'}
+              key={style.id}
+              onClick={() => toggleList('styles', style.title)}
+              type="button"
+            >
+              <img src={style.image} alt={style.title} />
+              <span>{style.title}</span>
+              {answers.styles.includes(style.title) && <CheckCircle2 size={20} />}
+            </button>
+          ))}
         </section>
-        <button className="primary-button full sticky-cta" onClick={onComplete}>
-          Finish and explore
+        <button className="primary-button full onboarding-continue" onClick={onComplete}>
+          Continue
         </button>
       </section>
     </main>
@@ -400,34 +393,34 @@ function Onboarding({ answers, setAnswers, onComplete }) {
 }
 
 function AppHeader({ route, onBack, bagCount }) {
-  const detailRoutes = ['detail', 'items', 'checkout'];
+  const detailRoutes = ['detail', 'items', 'bag', 'checkout'];
   const titles = {
-    home: 'For You',
-    search: 'Explore',
+    home: '',
+    search: 'Search',
     saved: 'Saved',
-    detail: 'Outfit Detail',
+    detail: 'Outfit Details',
     items: 'Items in Outfit',
-    bag: 'Your Bag',
+    bag: `Your Bag${bagCount ? ` (${bagCount})` : ''}`,
     checkout: 'Secure Checkout',
   };
 
   return (
     <header className="app-header">
-      {detailRoutes.includes(route) ? (
-        <button className="icon-button" onClick={onBack} aria-label="Back to home">
-          <ArrowLeft size={20} />
+      <StatusBar />
+      <div className="app-nav-row">
+        {detailRoutes.includes(route) ? (
+          <button className="nav-icon-button" onClick={onBack} aria-label="Back to home">
+            <ArrowLeft size={19} />
+          </button>
+        ) : (
+          <LogoMark compact />
+        )}
+        {route === 'home' ? <span /> : <h1>{titles[route]}</h1>}
+        <button className="nav-icon-button" aria-label={`${bagCount} bag items`}>
+          {route === 'home' ? <Bell size={18} /> : <ShoppingBag size={18} />}
+          {bagCount > 0 && <i>{bagCount}</i>}
         </button>
-      ) : (
-        <LogoMark compact />
-      )}
-      <div>
-        <p className="mini-label">Dressi</p>
-        <h1>{titles[route]}</h1>
       </div>
-      <button className="bag-pill" aria-label={`${bagCount} bag items`}>
-        <ShoppingBag size={18} />
-        <span>{bagCount}</span>
-      </button>
     </header>
   );
 }
@@ -439,17 +432,10 @@ function HomeFeed({ savedIds, toggleSave, openOutfit, addOutfitToBag, preference
 
   return (
     <section className="page-stack">
-      <section className="feed-intro">
-        <div>
-          <p className="eyebrow">One checkout. Every item.</p>
-          <h2>Swipe, save, shop.</h2>
-          <p>
-            Personalized for {preferences.budget.toLowerCase()} budgets, {preferences.fit.toLowerCase()}{' '}
-            fits, and {preferences.occasion.toLowerCase()} outfits.
-          </p>
-        </div>
-        <Sparkles size={28} />
-      </section>
+      <label className="search-bar home-search">
+        <Search size={17} />
+        <input placeholder="Search styles, brands, items..." />
+      </label>
       <div className="tabs horizontal-scroll">
         {feedTabs.map((tab) => (
           <button
@@ -489,14 +475,38 @@ function HomeFeed({ savedIds, toggleSave, openOutfit, addOutfitToBag, preference
 function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, featured = false }) {
   return (
     <article className={featured ? 'outfit-card featured' : 'outfit-card'}>
-      <button className="image-button" onClick={() => openOutfit(outfit.id)} type="button">
+      <button className="image-button outfit-image-wrap" onClick={() => openOutfit(outfit.id)} type="button">
         <img src={outfit.image} alt={`${outfit.title} outfit inspiration`} />
+        <div className="action-rail" aria-hidden="true">
+          <span>
+            <Heart size={18} fill="currentColor" />
+            {outfit.likes}
+          </span>
+          <span>
+            <Bookmark size={18} fill="currentColor" />
+            {outfit.saves}
+          </span>
+          <span>
+            <ShoppingBag size={18} />
+          </span>
+        </div>
+        <div className="feed-overlay">
+          <span className="ai-chip">
+            <LogoMark compact /> {outfit.creator}
+          </span>
+          <h3>{outfit.title}</h3>
+          <div className="tag-row">
+            {outfit.tags.slice(0, 3).map((tag) => (
+              <span key={tag}>{tag}</span>
+            ))}
+          </div>
+        </div>
       </button>
       <div className="outfit-card-body">
         <div className="outfit-card-title">
           <div>
-            <p>{outfit.creator}</p>
-            <h3>{outfit.title}</h3>
+            <p>{outfit.items.length} items ready to shop</p>
+            <h3>{formatPrice(outfit.priceEstimate)}</h3>
           </div>
           <button
             className={isSaved ? 'icon-button saved' : 'icon-button'}
@@ -506,19 +516,14 @@ function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, f
             <Heart size={19} fill={isSaved ? 'currentColor' : 'none'} />
           </button>
         </div>
-        <div className="tag-row">
-          {outfit.tags.slice(0, 4).map((tag) => (
-            <span key={tag}>{tag}</span>
+        <div className="product-strip">
+          {outfit.items.slice(0, 5).map((item) => (
+            <img src={item.image} alt={item.name} key={item.id} />
           ))}
-        </div>
-        <div className="outfit-meta">
-          <span>{formatPrice(outfit.priceEstimate)}</span>
-          <span>{outfit.items.length} items</span>
-          <span>{outfit.saves} saves</span>
         </div>
         <div className="card-actions">
           <button className="primary-button" onClick={() => addOutfitToBag(outfit)} type="button">
-            Shop Look
+            Buy Entire Look
           </button>
           <button className="secondary-button" onClick={() => openOutfit(outfit.id)} type="button">
             Details
@@ -766,7 +771,7 @@ function ProductRow({ item }) {
         <h3>{item.brand}</h3>
         <p>{item.name}</p>
         <small>
-          {item.color} · {item.retailer} · {item.availability}
+          {item.color} / {item.retailer} / {item.availability}
         </small>
         <label>
           Size
@@ -818,7 +823,7 @@ function BagPage({
             <div>
               <h3>{item.name}</h3>
               <p>
-                {item.brand} · {item.retailer}
+                {item.brand} / {item.retailer}
               </p>
               <div className="bag-controls">
                 <select
@@ -1058,24 +1063,25 @@ function EmptyState({ title, copy, action, onAction }) {
 
 function BottomNav({ route, setRoute, bagCount }) {
   const navItems = [
-    ['home', 'Home', Home],
-    ['search', 'Search', Search],
-    ['saved', 'Saved', Heart],
-    ['bag', 'Bag', ShoppingBag],
+    ['home', 'Home', Home, 'home'],
+    ['search', 'Search', Search, 'search'],
+    ['create', 'Create', Sparkles, 'home'],
+    ['saved', 'Saved', Heart, 'saved'],
+    ['profile', 'Profile', UserRound, 'saved'],
   ];
 
   return (
     <nav className="bottom-nav" aria-label="Primary">
-      {navItems.map(([id, label, Icon]) => (
+      {navItems.map(([id, label, Icon, targetRoute]) => (
         <button
           className={route === id ? 'active' : ''}
           key={id}
-          onClick={() => setRoute(id)}
+          onClick={() => setRoute(targetRoute)}
           type="button"
         >
           <span className="nav-icon-wrap">
             <Icon size={20} fill={id === 'saved' && route === id ? 'currentColor' : 'none'} />
-            {id === 'bag' && bagCount > 0 && <i>{bagCount}</i>}
+            {id === 'profile' && bagCount > 0 && <i>{bagCount}</i>}
           </span>
           {label}
         </button>

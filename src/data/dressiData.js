@@ -52,8 +52,7 @@ export const outfits = [
     creator: 'Styled by Dressi AI',
     description:
       'Soft neutrals, polished layers, and timeless accessories for a city day that can turn into dinner.',
-    image:
-      'https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=900&q=85',
+    image: '/assets/old-money-fit.png',
     tags: ['Old Money', 'Elegant', 'Neutral', 'Classic'],
     occasion: 'Brunch, work, travel',
     season: 'Spring',
@@ -424,8 +423,7 @@ export const styleCards = [
     id: 'old-money',
     title: 'Old Money',
     count: '2.2K outfits',
-    image:
-      'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=700&q=80',
+    image: '/assets/old-money-fit.png',
   },
   {
     id: 'streetwear',
