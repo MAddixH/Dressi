@@ -8,11 +8,13 @@ Create a hosted project at [supabase.com/dashboard](https://supabase.com/dashboa
 
 ## 2. Apply the schema
 
-Open the project's SQL Editor and run:
+Open the project's SQL Editor and run these files in order:
 
 `supabase/migrations/202606180001_phase_2_creator_platform.sql`
 
-This creates the Phase 2 tables, row-level security policies, signup trigger, and public `creator-media` storage bucket.
+`supabase/migrations/202606180002_seed_creator_catalog.sql`
+
+The first migration creates the Phase 2 tables, row-level security policies, signup trigger, and public `creator-media` storage bucket. The second stores Dressi's curated creator catalog in Supabase so follows and saves use persistent IDs.
 
 ## 3. Configure the app
 

@@ -177,14 +177,14 @@ function App() {
     try {
       const platform = await loadCreatorPlatform(activeSession?.user?.id);
       const liveUsernames = new Set(platform.creators.map((creator) => creator.username));
-      const livePostIds = new Set(platform.posts.map((post) => post.id));
+      const livePostKeys = new Set(platform.posts.map((post) => `${post.creatorUsername}:${post.title}`));
       setCreatorDirectory([
         ...platform.creators,
         ...seedCreators.filter((creator) => !liveUsernames.has(creator.username)),
       ]);
       setCreatorPosts([
         ...platform.posts,
-        ...initialCreatorPosts.filter((post) => !livePostIds.has(post.id)),
+        ...initialCreatorPosts.filter((post) => !livePostKeys.has(`${post.creatorUsername}:${post.title}`)),
       ]);
       setFollowedCreators(platform.followedUsernames);
       setSavedPostIds(platform.savedPostIds);
