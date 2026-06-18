@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BadgeCheck,
@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   CreditCard,
+  Compass,
   Heart,
   Home,
   LockKeyhole,
@@ -21,13 +22,26 @@ import {
   Truck,
   UserRound,
 } from 'lucide-react';
+import { outfits, popularSearches, styleCards } from './data/dressiData.js';
 import {
-  onboardingQuestions,
-  outfits,
-  popularSearches,
-  styleCards,
-  styleOptions,
-} from './data/dressiData.js';
+  creators,
+  creatorPosts as initialCreatorPosts,
+  currentCreator,
+  getCreator,
+  getCreatorPosts,
+} from './data/creatorData.js';
+import {
+  AccountProfile,
+  CreatorCloset,
+  CreatorDiscovery,
+  CreatorFeedCard,
+  CreatorProfile,
+  CreatorUpload,
+  FitCheckDetail,
+  RecreateThisFit,
+  ShopThisFit,
+} from './components/CreatorPlatform.jsx';
+import { buildPath, parsePath } from './lib/routes.js';
 
 const currency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -66,10 +80,17 @@ function StatusBar({ dark = false }) {
 }
 
 function App() {
-  const [stage, setStage] = useState('splash');
+  const initialPath = parsePath(window.location.pathname);
+  const [stage, setStage] = useState(window.location.pathname === '/' ? 'splash' : 'app');
   const [authMode, setAuthMode] = useState('sign-up');
-  const [route, setRoute] = useState('home');
-  const [selectedOutfitId, setSelectedOutfitId] = useState(outfits[0].id);
+  const [accountType, setAccountType] = useState('shopper');
+  const [route, setRoute] = useState(initialPath.route);
+  const [selectedOutfitId, setSelectedOutfitId] = useState(initialPath.outfitId ?? outfits[0].id);
+  const [selectedCreatorUsername, setSelectedCreatorUsername] = useState(initialPath.username ?? creators[0].username);
+  const [selectedPostId, setSelectedPostId] = useState(initialPath.postId ?? initialCreatorPosts[0].id);
+  const [creatorPosts, setCreatorPosts] = useState(initialCreatorPosts);
+  const [followedCreators, setFollowedCreators] = useState(['oldmoneyjake']);
+  const [savedPostIds, setSavedPostIds] = useState(['spring-city-fit']);
   const [savedIds, setSavedIds] = useState([outfits[0].id, outfits[2].id]);
   const [bagItems, setBagItems] = useState([]);
   const [orderPlaced, setOrderPlaced] = useState(false);
@@ -92,16 +113,76 @@ function App() {
     [savedIds],
   );
 
+  const selectedPost = useMemo(
+    () => creatorPosts.find((post) => post.id === selectedPostId) ?? creatorPosts[0],
+    [creatorPosts, selectedPostId],
+  );
+
+  const selectedCreator = useMemo(
+    () => getCreator(selectedCreatorUsername),
+    [selectedCreatorUsername],
+  );
+
+  const selectedPostCreator = useMemo(
+    () => getCreator(selectedPost.creatorUsername),
+    [selectedPost],
+  );
+
+  const accountCreator = useMemo(() => ({
+    ...currentCreator,
+    outfitPosts: getCreatorPosts(currentCreator.username, creatorPosts).length,
+  }), [creatorPosts]);
+
   const bagSubtotal = getItemsTotal(bagItems);
   const bagShipping = bagItems.length ? 12 : 0;
   const bagTax = bagSubtotal * 0.0825;
   const bagService = bagItems.length ? 4.95 : 0;
   const bagTotal = bagSubtotal + bagShipping + bagTax + bagService;
 
-  function openOutfit(outfitId, nextRoute = 'detail') {
-    setSelectedOutfitId(outfitId);
+  useEffect(() => {
+    function handlePopState() {
+      const next = parsePath(window.location.pathname);
+      setRoute(next.route);
+      if (next.outfitId) setSelectedOutfitId(next.outfitId);
+      if (next.username) setSelectedCreatorUsername(next.username);
+      if (next.postId) setSelectedPostId(next.postId);
+      setStage('app');
+    }
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  function navigate(nextRoute, context = {}, replace = false) {
+    const nextContext = {
+      outfitId: context.outfitId ?? selectedOutfitId,
+      username: context.username ?? selectedCreatorUsername,
+      postId: context.postId ?? selectedPostId,
+    };
+    if (context.outfitId) setSelectedOutfitId(context.outfitId);
+    if (context.username) setSelectedCreatorUsername(context.username);
+    if (context.postId) setSelectedPostId(context.postId);
     setRoute(nextRoute);
+    const path = buildPath(nextRoute, nextContext);
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', path);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function goBack() {
+    if (route === 'shop-fit' || route === 'recreate-fit') {
+      navigate('fit-check', { postId: selectedPostId });
+    } else if (route === 'fit-check') {
+      navigate('creator', { username: selectedPost.creatorUsername });
+    } else if (route === 'closet') {
+      navigate('creator', { username: selectedCreatorUsername });
+    } else if (route === 'items') {
+      navigate('detail', { outfitId: selectedOutfitId });
+    } else {
+      navigate('home');
+    }
+  }
+
+  function openOutfit(outfitId, nextRoute = 'detail') {
+    navigate(nextRoute, { outfitId });
   }
 
   function toggleSave(outfitId) {
@@ -112,18 +193,49 @@ function App() {
     );
   }
 
+  function toggleCreatorFollow(username) {
+    setFollowedCreators((current) => current.includes(username)
+      ? current.filter((item) => item !== username)
+      : [...current, username]);
+  }
+
+  function togglePostSave(postId) {
+    setSavedPostIds((current) => current.includes(postId)
+      ? current.filter((item) => item !== postId)
+      : [...current, postId]);
+  }
+
+  function openCreator(username) {
+    navigate('creator', { username });
+  }
+
+  function openPost(postId) {
+    navigate('fit-check', { postId });
+  }
+
   function addOutfitToBag(outfit = selectedOutfit) {
-    setBagItems(
-      outfit.items.map((item) => ({
-        ...item,
-        outfitId: outfit.id,
-        quantity: 1,
-        selectedSize: item.sizes[0],
-      })),
-    );
+    addProductsToBag(outfit.items, outfit.id);
+  }
+
+  function addProductsToBag(products, sourceId) {
+    setBagItems(products.map((item) => ({
+      ...item,
+      outfitId: sourceId,
+      quantity: 1,
+      selectedSize: item.sizes?.[0] ?? 'One size',
+      sizes: item.sizes ?? ['One size'],
+    })));
     setOrderPlaced(false);
-    setRoute('bag');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    navigate('bag');
+  }
+
+  function addClosetItemToBag(item) {
+    setBagItems((current) => [
+      ...current.filter((bagItem) => bagItem.id !== item.id),
+      { ...item, outfitId: `closet-${selectedCreatorUsername}`, quantity: 1, selectedSize: item.sizes?.[0] ?? 'One size', sizes: item.sizes ?? ['One size'] },
+    ]);
+    setOrderPlaced(false);
+    navigate('bag');
   }
 
   function updateBagItem(itemId, changes) {
@@ -150,6 +262,8 @@ function App() {
       <AuthScreen
         mode={authMode}
         setMode={setAuthMode}
+        accountType={accountType}
+        setAccountType={setAccountType}
         onContinue={() => setStage('onboarding')}
         onBack={() => setStage('splash')}
       />
@@ -161,14 +275,17 @@ function App() {
       <Onboarding
         answers={onboardingAnswers}
         setAnswers={setOnboardingAnswers}
-        onComplete={() => setStage('app')}
+        onComplete={() => {
+          setStage('app');
+          navigate('home', {}, true);
+        }}
       />
     );
   }
 
   return (
     <div className="app-shell">
-      <AppHeader route={route} onBack={() => setRoute('home')} bagCount={bagItems.length} />
+      <AppHeader route={route} onBack={goBack} onOpenBag={() => navigate('bag')} bagCount={bagItems.length} />
       <main className="screen">
         {route === 'home' && (
           <HomeFeed
@@ -177,14 +294,25 @@ function App() {
             openOutfit={openOutfit}
             addOutfitToBag={addOutfitToBag}
             preferences={onboardingAnswers}
+            creatorPosts={creatorPosts}
+            followedCreators={followedCreators}
+            savedPostIds={savedPostIds}
+            toggleCreatorFollow={toggleCreatorFollow}
+            togglePostSave={togglePostSave}
+            openCreator={openCreator}
+            openPost={openPost}
+            shopPost={(postId) => navigate('shop-fit', { postId })}
+            discoverCreators={() => navigate('creators')}
           />
         )}
-        {route === 'search' && <SearchStyles openOutfit={openOutfit} />}
+        {route === 'search' && <SearchStyles openOutfit={openOutfit} onDiscoverCreators={() => navigate('creators')} />}
         {route === 'saved' && (
           <SavedOutfits
             savedOutfits={savedOutfits}
             openOutfit={openOutfit}
             toggleSave={toggleSave}
+            savedPosts={creatorPosts.filter((post) => savedPostIds.includes(post.id))}
+            openPost={openPost}
           />
         )}
         {route === 'detail' && (
@@ -193,7 +321,7 @@ function App() {
             isSaved={savedIds.includes(selectedOutfit.id)}
             toggleSave={toggleSave}
             addOutfitToBag={addOutfitToBag}
-            onViewItems={() => setRoute('items')}
+            onViewItems={() => navigate('items', { outfitId: selectedOutfitId })}
           />
         )}
         {route === 'items' && (
@@ -214,8 +342,8 @@ function App() {
             total={bagTotal}
             updateBagItem={updateBagItem}
             removeBagItem={removeBagItem}
-            onFindOutfits={() => setRoute('home')}
-            onCheckout={() => setRoute('checkout')}
+            onFindOutfits={() => navigate('home')}
+            onCheckout={() => navigate('checkout')}
           />
         )}
         {route === 'checkout' && (
@@ -231,12 +359,90 @@ function App() {
             onContinue={() => {
               setOrderPlaced(false);
               setBagItems([]);
-              setRoute('home');
+              navigate('home');
             }}
           />
         )}
+        {route === 'creators' && (
+          <CreatorDiscovery
+            creators={creators}
+            posts={creatorPosts}
+            followed={followedCreators}
+            onToggleFollow={toggleCreatorFollow}
+            onOpenCreator={openCreator}
+            onOpenPost={openPost}
+          />
+        )}
+        {route === 'creator' && (
+          <CreatorProfile
+            creator={selectedCreator}
+            posts={getCreatorPosts(selectedCreator.username, creatorPosts)}
+            followed={followedCreators.includes(selectedCreator.username)}
+            onToggleFollow={toggleCreatorFollow}
+            onOpenPost={openPost}
+            onOpenCloset={(username) => navigate('closet', { username })}
+            onShop={(postId) => navigate('shop-fit', { postId })}
+          />
+        )}
+        {route === 'fit-check' && (
+          <FitCheckDetail
+            post={selectedPost}
+            creator={selectedPostCreator}
+            isSaved={savedPostIds.includes(selectedPost.id)}
+            isFollowed={followedCreators.includes(selectedPostCreator.username)}
+            onToggleSave={togglePostSave}
+            onToggleFollow={toggleCreatorFollow}
+            onOpenCreator={openCreator}
+            onShop={(postId) => navigate('shop-fit', { postId })}
+            onRecreate={(postId) => navigate('recreate-fit', { postId })}
+          />
+        )}
+        {route === 'shop-fit' && (
+          <ShopThisFit
+            post={selectedPost}
+            creator={selectedPostCreator}
+            isSaved={savedPostIds.includes(selectedPost.id)}
+            onToggleSave={togglePostSave}
+            onAddAll={addProductsToBag}
+            onRecreate={(postId) => navigate('recreate-fit', { postId })}
+          />
+        )}
+        {route === 'recreate-fit' && (
+          <RecreateThisFit post={selectedPost} creator={selectedPostCreator} onAddAll={addProductsToBag} />
+        )}
+        {route === 'closet' && (
+          <CreatorCloset
+            creator={selectedCreator}
+            posts={creatorPosts}
+            onShopItem={addClosetItemToBag}
+          />
+        )}
+        {route === 'upload' && (
+          <CreatorUpload
+            creator={accountCreator}
+            accountType={accountType}
+            onUpgrade={() => setAccountType('creator')}
+            onPublish={(post) => {
+              setCreatorPosts((current) => [post, ...current]);
+              setSelectedCreatorUsername(currentCreator.username);
+              navigate('creator', { username: currentCreator.username });
+            }}
+            onCancel={() => navigate('profile')}
+          />
+        )}
+        {route === 'profile' && (
+          <AccountProfile
+            accountType={accountType}
+            creator={accountCreator}
+            followedCount={followedCreators.length}
+            onUpgrade={() => setAccountType('creator')}
+            onOpenCreator={openCreator}
+            onUpload={() => navigate('upload')}
+            onDiscover={() => navigate('creators')}
+          />
+        )}
       </main>
-      <BottomNav route={route} setRoute={setRoute} bagCount={bagItems.length} />
+      <BottomNav route={route} navigate={navigate} bagCount={bagItems.length} />
     </div>
   );
 }
@@ -275,7 +481,7 @@ function SplashScreen({ onStart, onLogin }) {
   );
 }
 
-function AuthScreen({ mode, setMode, onContinue, onBack }) {
+function AuthScreen({ mode, setMode, accountType, setAccountType, onContinue, onBack }) {
   const isSignUp = mode === 'sign-up';
 
   return (
@@ -307,6 +513,19 @@ function AuthScreen({ mode, setMode, onContinue, onBack }) {
           </button>
         </div>
         <form className="form-stack" onSubmit={(event) => event.preventDefault()}>
+          {isSignUp && (
+            <div>
+              <span className="field-label">Account type</span>
+              <div className="segmented account-type-control">
+                <button className={accountType === 'shopper' ? 'active' : ''} onClick={() => setAccountType('shopper')} type="button">
+                  <UserRound size={15} /> Shopper
+                </button>
+                <button className={accountType === 'creator' ? 'active' : ''} onClick={() => setAccountType('creator')} type="button">
+                  <Sparkles size={15} /> Creator
+                </button>
+              </div>
+            </div>
+          )}
           {isSignUp && (
             <label>
               Name
@@ -392,8 +611,8 @@ function Onboarding({ answers, setAnswers, onComplete }) {
   );
 }
 
-function AppHeader({ route, onBack, bagCount }) {
-  const detailRoutes = ['detail', 'items', 'bag', 'checkout'];
+function AppHeader({ route, onBack, onOpenBag, bagCount }) {
+  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators'];
   const titles = {
     home: '',
     search: 'Search',
@@ -402,6 +621,14 @@ function AppHeader({ route, onBack, bagCount }) {
     items: 'Items in Outfit',
     bag: `Your Bag${bagCount ? ` (${bagCount})` : ''}`,
     checkout: 'Secure Checkout',
+    creators: 'Creators',
+    creator: 'Creator Profile',
+    'fit-check': 'Fit Check',
+    'shop-fit': 'Shop This Fit',
+    'recreate-fit': 'Recreate This Fit',
+    closet: 'Creator Closet',
+    upload: 'Create',
+    profile: 'Profile',
   };
 
   return (
@@ -416,7 +643,7 @@ function AppHeader({ route, onBack, bagCount }) {
           <LogoMark compact />
         )}
         {route === 'home' ? <span /> : <h1>{titles[route]}</h1>}
-        <button className="nav-icon-button" aria-label={`${bagCount} bag items`}>
+        <button className="nav-icon-button" onClick={onOpenBag} aria-label={`${bagCount} bag items`} type="button">
           {route === 'home' ? <Bell size={18} /> : <ShoppingBag size={18} />}
           {bagCount > 0 && <i>{bagCount}</i>}
         </button>
@@ -425,10 +652,28 @@ function AppHeader({ route, onBack, bagCount }) {
   );
 }
 
-function HomeFeed({ savedIds, toggleSave, openOutfit, addOutfitToBag, preferences }) {
+function HomeFeed({
+  savedIds,
+  toggleSave,
+  openOutfit,
+  addOutfitToBag,
+  preferences,
+  creatorPosts,
+  followedCreators,
+  savedPostIds,
+  toggleCreatorFollow,
+  togglePostSave,
+  openCreator,
+  openPost,
+  shopPost,
+  discoverCreators,
+}) {
   const [activeTab, setActiveTab] = useState('For You');
-  const feedTabs = ['For You', 'Trending', 'New', 'AI Picks'];
+  const feedTabs = ['For You', 'Following', 'Trending'];
   const featured = outfits.find((outfit) => outfit.tags.some((tag) => preferences.styles.includes(tag))) ?? outfits[0];
+  const visibleCreatorPosts = [...creatorPosts]
+    .filter((post) => activeTab !== 'Following' || followedCreators.includes(post.creatorUsername))
+    .sort((a, b) => activeTab === 'Trending' ? b.likes - a.likes : 0);
 
   return (
     <section className="page-stack">
@@ -448,26 +693,46 @@ function HomeFeed({ savedIds, toggleSave, openOutfit, addOutfitToBag, preference
           </button>
         ))}
       </div>
-      <OutfitCard
-        outfit={featured}
-        isSaved={savedIds.includes(featured.id)}
-        toggleSave={toggleSave}
-        openOutfit={openOutfit}
-        addOutfitToBag={addOutfitToBag}
-        featured
-      />
-      {outfits
-        .filter((outfit) => outfit.id !== featured.id)
-        .map((outfit) => (
+      {activeTab === 'Following' && !visibleCreatorPosts.length && (
+        <EmptyState title="Your following feed is quiet." copy="Follow creators to fill this feed with their newest fit checks." action="Discover creators" onAction={discoverCreators} />
+      )}
+      {visibleCreatorPosts.slice(0, activeTab === 'For You' ? 2 : undefined).map((post) => (
+        <CreatorFeedCard
+          post={post}
+          creator={getCreator(post.creatorUsername)}
+          key={post.id}
+          isFollowed={followedCreators.includes(post.creatorUsername)}
+          isSaved={savedPostIds.includes(post.id)}
+          onToggleFollow={toggleCreatorFollow}
+          onToggleSave={togglePostSave}
+          onOpenCreator={openCreator}
+          onOpenPost={openPost}
+          onShop={shopPost}
+        />
+      ))}
+      {activeTab === 'For You' && (
+        <>
+          <div className="feed-divider"><span>Styled by Dressi AI</span></div>
           <OutfitCard
-            outfit={outfit}
-            key={outfit.id}
-            isSaved={savedIds.includes(outfit.id)}
+            outfit={featured}
+            isSaved={savedIds.includes(featured.id)}
             toggleSave={toggleSave}
             openOutfit={openOutfit}
             addOutfitToBag={addOutfitToBag}
+            featured
           />
-        ))}
+          {outfits.filter((outfit) => outfit.id !== featured.id).slice(0, 2).map((outfit) => (
+            <OutfitCard
+              outfit={outfit}
+              key={outfit.id}
+              isSaved={savedIds.includes(outfit.id)}
+              toggleSave={toggleSave}
+              openOutfit={openOutfit}
+              addOutfitToBag={addOutfitToBag}
+            />
+          ))}
+        </>
+      )}
     </section>
   );
 }
@@ -534,7 +799,7 @@ function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, f
   );
 }
 
-function SearchStyles({ openOutfit }) {
+function SearchStyles({ openOutfit, onDiscoverCreators }) {
   const [query, setQuery] = useState('');
   const filteredOutfits = outfits.filter((outfit) => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -555,6 +820,11 @@ function SearchStyles({ openOutfit }) {
           placeholder="Search styles, brands, items..."
         />
       </label>
+      <button className="creator-search-banner" onClick={onDiscoverCreators} type="button">
+        <span><Compass size={20} /></span>
+        <div><p className="eyebrow">Creator discovery</p><strong>Find people who dress like you</strong><small>Browse fit checks, closets, and style communities</small></div>
+        <ChevronRight size={18} />
+      </button>
       <section>
         <div className="section-heading">
           <h2>Popular searches</h2>
@@ -609,9 +879,9 @@ function SearchStyles({ openOutfit }) {
   );
 }
 
-function SavedOutfits({ savedOutfits, openOutfit, toggleSave }) {
+function SavedOutfits({ savedOutfits, openOutfit, toggleSave, savedPosts, openPost }) {
   const [activeTab, setActiveTab] = useState('All');
-  const tabs = ['All', 'Favorites', 'Looks', 'Purchased'];
+  const tabs = ['All', 'Creator Fits', 'Looks', 'Purchased'];
 
   return (
     <section className="page-stack">
@@ -634,7 +904,20 @@ function SavedOutfits({ savedOutfits, openOutfit, toggleSave }) {
           </button>
         ))}
       </section>
-      {savedOutfits.length ? (
+      {(activeTab === 'All' || activeTab === 'Creator Fits') && savedPosts.length > 0 && (
+        <section>
+          <div className="section-heading"><h2>Saved creator fits</h2><span>{savedPosts.length}</span></div>
+          <div className="saved-creator-grid">
+            {savedPosts.map((post) => (
+              <button onClick={() => openPost(post.id)} key={post.id} type="button">
+                <img src={post.image} alt={post.title} />
+                <span><small>@{post.creatorUsername}</small><strong>{post.title}</strong></span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+      {(activeTab === 'All' || activeTab === 'Looks') && savedOutfits.length ? (
         <div className="saved-grid">
           {savedOutfits.map((outfit) => (
             <article className="saved-card" key={outfit.id}>
@@ -652,14 +935,14 @@ function SavedOutfits({ savedOutfits, openOutfit, toggleSave }) {
             </article>
           ))}
         </div>
-      ) : (
+      ) : activeTab !== 'Creator Fits' && !savedPosts.length ? (
         <EmptyState
           title="You have not saved any looks yet."
           copy="Build a wardrobe board by saving outfits from your feed."
           action="Explore outfits"
           onAction={() => openOutfit(outfits[0].id, 'home')}
         />
-      )}
+      ) : null}
     </section>
   );
 }
@@ -1061,27 +1344,29 @@ function EmptyState({ title, copy, action, onAction }) {
   );
 }
 
-function BottomNav({ route, setRoute, bagCount }) {
+function BottomNav({ route, navigate }) {
   const navItems = [
-    ['home', 'Home', Home, 'home'],
-    ['search', 'Search', Search, 'search'],
-    ['create', 'Create', Sparkles, 'home'],
-    ['saved', 'Saved', Heart, 'saved'],
-    ['profile', 'Profile', UserRound, 'saved'],
+    ['home', 'Home', Home],
+    ['search', 'Search', Search],
+    ['upload', 'Create', Sparkles],
+    ['saved', 'Saved', Heart],
+    ['profile', 'Profile', UserRound],
   ];
+  const activeRoute = route === 'creators' ? 'search'
+    : ['creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet'].includes(route) ? 'home'
+      : route;
 
   return (
     <nav className="bottom-nav" aria-label="Primary">
-      {navItems.map(([id, label, Icon, targetRoute]) => (
+      {navItems.map(([id, label, Icon]) => (
         <button
-          className={route === id ? 'active' : ''}
+          className={activeRoute === id ? 'active' : ''}
           key={id}
-          onClick={() => setRoute(targetRoute)}
+          onClick={() => navigate(id)}
           type="button"
         >
           <span className="nav-icon-wrap">
-            <Icon size={20} fill={id === 'saved' && route === id ? 'currentColor' : 'none'} />
-            {id === 'profile' && bagCount > 0 && <i>{bagCount}</i>}
+            <Icon size={20} fill={id === 'saved' && activeRoute === id ? 'currentColor' : 'none'} />
           </span>
           {label}
         </button>
