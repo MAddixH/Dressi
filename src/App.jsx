@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { outfits, popularSearches, styleCards } from './data/dressiData.js';
 import {
-  creators,
+  creators as seedCreators,
   creatorPosts as initialCreatorPosts,
   currentCreator,
   getCreator,
@@ -42,6 +42,21 @@ import {
   ShopThisFit,
 } from './components/CreatorPlatform.jsx';
 import { buildPath, parsePath } from './lib/routes.js';
+import { isSupabaseConfigured } from './lib/supabase.js';
+import {
+  getAccount,
+  getSession,
+  loadCreatorPlatform,
+  onAuthStateChange,
+  publishCreatorPost,
+  setCreatorFollow,
+  setOutfitSaved,
+  setPostSaved,
+  signIn,
+  signOut,
+  signUp,
+  upgradeAccountToCreator,
+} from './services/dressiApi.js';
 
 const currency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -86,14 +101,21 @@ function App() {
   const [accountType, setAccountType] = useState('shopper');
   const [route, setRoute] = useState(initialPath.route);
   const [selectedOutfitId, setSelectedOutfitId] = useState(initialPath.outfitId ?? outfits[0].id);
-  const [selectedCreatorUsername, setSelectedCreatorUsername] = useState(initialPath.username ?? creators[0].username);
+  const [selectedCreatorUsername, setSelectedCreatorUsername] = useState(initialPath.username ?? seedCreators[0].username);
   const [selectedPostId, setSelectedPostId] = useState(initialPath.postId ?? initialCreatorPosts[0].id);
   const [creatorPosts, setCreatorPosts] = useState(initialCreatorPosts);
+  const [creatorDirectory, setCreatorDirectory] = useState(seedCreators);
   const [followedCreators, setFollowedCreators] = useState(['oldmoneyjake']);
   const [savedPostIds, setSavedPostIds] = useState(['spring-city-fit']);
   const [savedIds, setSavedIds] = useState([outfits[0].id, outfits[2].id]);
   const [bagItems, setBagItems] = useState([]);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [session, setSession] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [backendState, setBackendState] = useState(isSupabaseConfigured ? 'loading' : 'mock');
+  const [appNotice, setAppNotice] = useState('');
+  const [authFeedback, setAuthFeedback] = useState({ error: '', message: '', loading: false });
+  const [isPublishing, setIsPublishing] = useState(false);
   const [onboardingAnswers, setOnboardingAnswers] = useState({
     preference: 'All',
     budget: 'Mixed',
@@ -119,25 +141,92 @@ function App() {
   );
 
   const selectedCreator = useMemo(
-    () => getCreator(selectedCreatorUsername),
-    [selectedCreatorUsername],
+    () => creatorDirectory.find((creator) => creator.username === selectedCreatorUsername) ?? getCreator(selectedCreatorUsername),
+    [creatorDirectory, selectedCreatorUsername],
   );
 
   const selectedPostCreator = useMemo(
-    () => getCreator(selectedPost.creatorUsername),
-    [selectedPost],
+    () => creatorDirectory.find((creator) => creator.username === selectedPost.creatorUsername) ?? getCreator(selectedPost.creatorUsername),
+    [creatorDirectory, selectedPost],
   );
 
-  const accountCreator = useMemo(() => ({
-    ...currentCreator,
-    outfitPosts: getCreatorPosts(currentCreator.username, creatorPosts).length,
-  }), [creatorPosts]);
+  const accountCreator = useMemo(() => {
+    const persistedCreator = creatorDirectory.find((creator) => creator.userId === session?.user?.id);
+    if (persistedCreator) return persistedCreator;
+    return {
+      ...currentCreator,
+      displayName: account?.profile?.display_name ?? currentCreator.displayName,
+      avatar: account?.profile?.avatar_url ?? currentCreator.avatar,
+      outfitPosts: getCreatorPosts(currentCreator.username, creatorPosts).length,
+    };
+  }, [account, creatorDirectory, creatorPosts, session]);
 
   const bagSubtotal = getItemsTotal(bagItems);
   const bagShipping = bagItems.length ? 12 : 0;
   const bagTax = bagSubtotal * 0.0825;
   const bagService = bagItems.length ? 4.95 : 0;
   const bagTotal = bagSubtotal + bagShipping + bagTax + bagService;
+
+  async function refreshBackendData(activeSession = session) {
+    if (!isSupabaseConfigured) return;
+    setBackendState('loading');
+    try {
+      const platform = await loadCreatorPlatform(activeSession?.user?.id);
+      const liveUsernames = new Set(platform.creators.map((creator) => creator.username));
+      const livePostIds = new Set(platform.posts.map((post) => post.id));
+      setCreatorDirectory([
+        ...platform.creators,
+        ...seedCreators.filter((creator) => !liveUsernames.has(creator.username)),
+      ]);
+      setCreatorPosts([
+        ...platform.posts,
+        ...initialCreatorPosts.filter((post) => !livePostIds.has(post.id)),
+      ]);
+      setFollowedCreators(platform.followedUsernames);
+      setSavedPostIds(platform.savedPostIds);
+      setSavedIds(platform.savedOutfitIds);
+
+      if (activeSession?.user?.id) {
+        const nextAccount = await getAccount(activeSession.user.id);
+        setAccount(nextAccount);
+        setAccountType(nextAccount.profile.account_type);
+      } else {
+        setAccount(null);
+      }
+      setBackendState('live');
+    } catch (error) {
+      setBackendState('error');
+      setAppNotice(error.message);
+    }
+  }
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined;
+    let active = true;
+
+    getSession()
+      .then((currentSession) => {
+        if (!active) return;
+        setSession(currentSession);
+        return refreshBackendData(currentSession);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setBackendState('error');
+        setAppNotice(error.message);
+      });
+
+    const { data } = onAuthStateChange((nextSession) => {
+      if (!active) return;
+      setSession(nextSession);
+      refreshBackendData(nextSession);
+    });
+
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     function handlePopState() {
@@ -185,24 +274,161 @@ function App() {
     navigate(nextRoute, { outfitId });
   }
 
-  function toggleSave(outfitId) {
-    setSavedIds((current) =>
-      current.includes(outfitId)
-        ? current.filter((id) => id !== outfitId)
-        : [...current, outfitId],
-    );
+  async function toggleSave(outfitId) {
+    const wasSaved = savedIds.includes(outfitId);
+    if (isSupabaseConfigured && !session) {
+      setAuthMode('log-in');
+      setStage('auth');
+      setAuthFeedback({ error: '', message: 'Log in to save outfits.', loading: false });
+      return;
+    }
+    setSavedIds((current) => wasSaved
+      ? current.filter((id) => id !== outfitId)
+      : [...current, outfitId]);
+    if (!isSupabaseConfigured) return;
+    try {
+      await setOutfitSaved({ userId: session.user.id, outfitId, saved: !wasSaved });
+    } catch (error) {
+      setSavedIds((current) => wasSaved
+        ? [...current, outfitId]
+        : current.filter((id) => id !== outfitId));
+      setAppNotice(error.message);
+    }
   }
 
-  function toggleCreatorFollow(username) {
-    setFollowedCreators((current) => current.includes(username)
+  async function toggleCreatorFollow(username) {
+    const wasFollowing = followedCreators.includes(username);
+    if (isSupabaseConfigured && !session) {
+      setAuthMode('log-in');
+      setStage('auth');
+      setAuthFeedback({ error: '', message: 'Log in to follow creators.', loading: false });
+      return;
+    }
+    setFollowedCreators((current) => wasFollowing
       ? current.filter((item) => item !== username)
       : [...current, username]);
+    if (!isSupabaseConfigured) return;
+    try {
+      const creator = creatorDirectory.find((item) => item.username === username);
+      await setCreatorFollow({ userId: session.user.id, creatorId: creator?.id, following: !wasFollowing });
+    } catch (error) {
+      setFollowedCreators((current) => wasFollowing
+        ? [...current, username]
+        : current.filter((item) => item !== username));
+      setAppNotice(error.message);
+    }
   }
 
-  function togglePostSave(postId) {
-    setSavedPostIds((current) => current.includes(postId)
+  async function togglePostSave(postId) {
+    const wasSaved = savedPostIds.includes(postId);
+    if (isSupabaseConfigured && !session) {
+      setAuthMode('log-in');
+      setStage('auth');
+      setAuthFeedback({ error: '', message: 'Log in to save creator fits.', loading: false });
+      return;
+    }
+    setSavedPostIds((current) => wasSaved
       ? current.filter((item) => item !== postId)
       : [...current, postId]);
+    if (!isSupabaseConfigured) return;
+    try {
+      await setPostSaved({ userId: session.user.id, postId, saved: !wasSaved });
+    } catch (error) {
+      setSavedPostIds((current) => wasSaved
+        ? [...current, postId]
+        : current.filter((item) => item !== postId));
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handleAuthSubmit(credentials) {
+    if (!isSupabaseConfigured) {
+      setStage('onboarding');
+      return;
+    }
+    setAuthFeedback({ error: '', message: '', loading: true });
+    try {
+      if (authMode === 'sign-up') {
+        const result = await signUp({ ...credentials, accountType });
+        if (!result.session) {
+          setAuthFeedback({ error: '', message: 'Check your email to confirm your Dressi account, then log in.', loading: false });
+          return;
+        }
+        setSession(result.session);
+        await refreshBackendData(result.session);
+        setStage('onboarding');
+      } else {
+        const result = await signIn(credentials);
+        setSession(result.session);
+        await refreshBackendData(result.session);
+        setStage('app');
+        navigate('home', {}, true);
+      }
+      setAuthFeedback({ error: '', message: '', loading: false });
+    } catch (error) {
+      setAuthFeedback({ error: error.message, message: '', loading: false });
+    }
+  }
+
+  async function handleUpgradeAccount() {
+    if (!isSupabaseConfigured) {
+      setAccountType('creator');
+      return;
+    }
+    if (!session) {
+      setAuthMode('log-in');
+      setStage('auth');
+      setAuthFeedback({ error: '', message: 'Log in before upgrading to a creator account.', loading: false });
+      return;
+    }
+    try {
+      await upgradeAccountToCreator(session.user.id, {
+        username: accountCreator.username,
+        bio: accountCreator.bio,
+        location: accountCreator.location,
+        styleCategories: accountCreator.tags,
+        coverUrl: accountCreator.cover,
+      });
+      setAccountType('creator');
+      await refreshBackendData(session);
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handlePublishPost(post, mediaFiles) {
+    if (!isSupabaseConfigured) {
+      setCreatorPosts((current) => [post, ...current]);
+      setSelectedCreatorUsername(currentCreator.username);
+      navigate('creator', { username: currentCreator.username });
+      return;
+    }
+    if (!session) {
+      setAuthMode('log-in');
+      setStage('auth');
+      return;
+    }
+    setIsPublishing(true);
+    try {
+      await publishCreatorPost({ userId: session.user.id, post, mediaFiles });
+      await refreshBackendData(session);
+      const refreshedAccount = await getAccount(session.user.id);
+      setAccount(refreshedAccount);
+      navigate('creator', { username: refreshedAccount.creator.username });
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
+  async function handleSignOut() {
+    if (isSupabaseConfigured) await signOut();
+    setSession(null);
+    setAccount(null);
+    setAccountType('shopper');
+    setStage('splash');
+    window.history.replaceState({}, '', '/');
   }
 
   function openCreator(username) {
@@ -264,7 +490,9 @@ function App() {
         setMode={setAuthMode}
         accountType={accountType}
         setAccountType={setAccountType}
-        onContinue={() => setStage('onboarding')}
+        feedback={authFeedback}
+        onContinue={handleAuthSubmit}
+        onGuest={() => setStage('onboarding')}
         onBack={() => setStage('splash')}
       />
     );
@@ -287,6 +515,12 @@ function App() {
     <div className="app-shell">
       <AppHeader route={route} onBack={goBack} onOpenBag={() => navigate('bag')} bagCount={bagItems.length} />
       <main className="screen">
+        {appNotice && (
+          <button className="app-notice" onClick={() => setAppNotice('')} type="button">
+            <span>{appNotice}</span>
+            <strong>Dismiss</strong>
+          </button>
+        )}
         {route === 'home' && (
           <HomeFeed
             savedIds={savedIds}
@@ -295,6 +529,7 @@ function App() {
             addOutfitToBag={addOutfitToBag}
             preferences={onboardingAnswers}
             creatorPosts={creatorPosts}
+            creators={creatorDirectory}
             followedCreators={followedCreators}
             savedPostIds={savedPostIds}
             toggleCreatorFollow={toggleCreatorFollow}
@@ -365,7 +600,7 @@ function App() {
         )}
         {route === 'creators' && (
           <CreatorDiscovery
-            creators={creators}
+            creators={creatorDirectory}
             posts={creatorPosts}
             followed={followedCreators}
             onToggleFollow={toggleCreatorFollow}
@@ -421,12 +656,9 @@ function App() {
           <CreatorUpload
             creator={accountCreator}
             accountType={accountType}
-            onUpgrade={() => setAccountType('creator')}
-            onPublish={(post) => {
-              setCreatorPosts((current) => [post, ...current]);
-              setSelectedCreatorUsername(currentCreator.username);
-              navigate('creator', { username: currentCreator.username });
-            }}
+            isPublishing={isPublishing}
+            onUpgrade={handleUpgradeAccount}
+            onPublish={handlePublishPost}
             onCancel={() => navigate('profile')}
           />
         )}
@@ -435,10 +667,11 @@ function App() {
             accountType={accountType}
             creator={accountCreator}
             followedCount={followedCreators.length}
-            onUpgrade={() => setAccountType('creator')}
+            onUpgrade={handleUpgradeAccount}
             onOpenCreator={openCreator}
             onUpload={() => navigate('upload')}
             onDiscover={() => navigate('creators')}
+            onSignOut={session ? handleSignOut : null}
           />
         )}
       </main>
@@ -481,8 +714,17 @@ function SplashScreen({ onStart, onLogin }) {
   );
 }
 
-function AuthScreen({ mode, setMode, accountType, setAccountType, onContinue, onBack }) {
+function AuthScreen({ mode, setMode, accountType, setAccountType, feedback, onContinue, onGuest, onBack }) {
   const isSignUp = mode === 'sign-up';
+  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  function submit(event) {
+    event.preventDefault();
+    onContinue({ name, username, email, password });
+  }
 
   return (
     <main className="auth-shell auth-screen">
@@ -512,7 +754,7 @@ function AuthScreen({ mode, setMode, accountType, setAccountType, onContinue, on
             Log in
           </button>
         </div>
-        <form className="form-stack" onSubmit={(event) => event.preventDefault()}>
+        <form className="form-stack" onSubmit={submit}>
           {isSignUp && (
             <div>
               <span className="field-label">Account type</span>
@@ -529,25 +771,33 @@ function AuthScreen({ mode, setMode, accountType, setAccountType, onContinue, on
           {isSignUp && (
             <label>
               Name
-              <input type="text" placeholder="Alex Morgan" />
+              <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex Morgan" required />
+            </label>
+          )}
+          {isSignUp && accountType === 'creator' && (
+            <label>
+              Creator username
+              <input type="text" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="alexstyles" pattern="[A-Za-z0-9_]{3,24}" required />
             </label>
           )}
           <label>
             Email
-            <input type="email" placeholder="alex@dressi.app" />
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="alex@dressi.app" required />
           </label>
           <label>
             Password
-            <input type="password" placeholder="Password" />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" minLength="8" required />
           </label>
           <div className="auth-note">
             <ShieldCheck size={16} />
             Secure profile setup. Payment details are only collected at checkout.
           </div>
-          <button className="primary-button full" onClick={onContinue} type="button">
-            {isSignUp ? 'Create account' : 'Log in'}
+          {feedback.error && <div className="inline-notice error">{feedback.error}</div>}
+          {feedback.message && <div className="inline-notice">{feedback.message}</div>}
+          <button className="primary-button full" type="submit" disabled={feedback.loading}>
+            {feedback.loading ? 'Please wait...' : isSignUp ? 'Create account' : 'Log in'}
           </button>
-          <button className="text-button" onClick={onContinue} type="button">
+          <button className="text-button" onClick={onGuest} type="button">
             Continue as guest
           </button>
           {!isSignUp && (
@@ -659,6 +909,7 @@ function HomeFeed({
   addOutfitToBag,
   preferences,
   creatorPosts,
+  creators,
   followedCreators,
   savedPostIds,
   toggleCreatorFollow,
@@ -699,7 +950,7 @@ function HomeFeed({
       {visibleCreatorPosts.slice(0, activeTab === 'For You' ? 2 : undefined).map((post) => (
         <CreatorFeedCard
           post={post}
-          creator={getCreator(post.creatorUsername)}
+          creator={creators.find((creator) => creator.username === post.creatorUsername) ?? getCreator(post.creatorUsername)}
           key={post.id}
           isFollowed={followedCreators.includes(post.creatorUsername)}
           isSaved={savedPostIds.includes(post.id)}

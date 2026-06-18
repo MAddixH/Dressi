@@ -9,6 +9,7 @@ import {
   Heart,
   ImagePlus,
   Layers3,
+  LogOut,
   MapPin,
   MessageCircle,
   PackagePlus,
@@ -402,11 +403,12 @@ export function CreatorCloset({ creator, posts, onShopItem, embedded = false }) 
 
 const blankProduct = () => ({ id: `tag-${Date.now()}-${Math.random()}`, category: 'Top', brand: '', name: '', price: '', retailer: '', affiliateUrl: '', image: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=600&q=80', sizes: ['XS', 'S', 'M', 'L', 'XL'], color: 'As shown', availability: 'In stock' });
 
-export function CreatorUpload({ creator, accountType, onUpgrade, onPublish, onCancel }) {
+export function CreatorUpload({ creator, accountType, isPublishing = false, onUpgrade, onPublish, onCancel }) {
   const [mediaType, setMediaType] = useState('photo');
   const [preview, setPreview] = useState(creator.cover);
   const [previewKind, setPreviewKind] = useState('image');
   const [gallery, setGallery] = useState([]);
+  const [mediaFiles, setMediaFiles] = useState([]);
   const [caption, setCaption] = useState('');
   const [title, setTitle] = useState('');
   const [occasion, setOccasion] = useState('Everyday');
@@ -457,7 +459,7 @@ export function CreatorUpload({ creator, accountType, onUpgrade, onPublish, onCa
       comments: 0,
       createdAt: 'now',
       products: validProducts.map((item) => ({ ...item, price: Number(item.price), retailer: item.retailer || item.brand })),
-    });
+    }, mediaFiles);
   }
 
   return (
@@ -486,6 +488,7 @@ export function CreatorUpload({ creator, accountType, onUpgrade, onPublish, onCa
               setPreview(urls[0]);
               setPreviewKind(firstIsVideo ? 'video' : 'image');
               setGallery(urls);
+              setMediaFiles(files);
               if (firstIsVideo) setMediaType('video');
               if (files.length > 1) setMediaType('carousel');
             }}
@@ -512,12 +515,12 @@ export function CreatorUpload({ creator, accountType, onUpgrade, onPublish, onCa
         ))}
       </section>
       {error && <div className="inline-notice error">{error}</div>}
-      <div className="stacked-actions"><button className="primary-button full" onClick={submit} type="button"><Upload size={18} /> Publish Fit Check</button><button className="secondary-button full" onClick={onCancel} type="button">Save draft and exit</button></div>
+      <div className="stacked-actions"><button className="primary-button full" onClick={submit} type="button" disabled={isPublishing}><Upload size={18} /> {isPublishing ? 'Publishing...' : 'Publish Fit Check'}</button><button className="secondary-button full" onClick={onCancel} type="button" disabled={isPublishing}>Save draft and exit</button></div>
     </section>
   );
 }
 
-export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover }) {
+export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onSignOut }) {
   return (
     <section className="page-stack account-profile">
       <section className="account-hero">
@@ -537,6 +540,7 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
       <section className="profile-command-list">
         <button onClick={onDiscover} type="button"><UserPlus size={19} /><span><strong>Find creators</strong><small>Personalize your following feed</small></span><ChevronRight size={18} /></button>
         <button type="button"><ExternalLink size={19} /><span><strong>Connected social profiles</strong><small>{creator.socialLinks.instagram}</small></span><ChevronRight size={18} /></button>
+        {onSignOut && <button onClick={onSignOut} type="button"><LogOut size={19} /><span><strong>Log out</strong><small>Sign out of this Dressi account</small></span><ChevronRight size={18} /></button>}
       </section>
     </section>
   );

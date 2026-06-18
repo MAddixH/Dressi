@@ -117,6 +117,65 @@ create table if not exists public.saved_creator_posts (
   primary key (user_id, post_id)
 );
 
+create table if not exists public.saved_outfit_references (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  outfit_key text not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, outfit_key)
+);
+
+create or replace function public.handle_new_dressi_user()
+returns trigger
+language plpgsql
+security definer set search_path = ''
+as $$
+declare
+  requested_type text;
+  requested_username text;
+begin
+  requested_type := coalesce(new.raw_user_meta_data ->> 'account_type', 'shopper');
+  requested_username := coalesce(
+    nullif(new.raw_user_meta_data ->> 'username', ''),
+    'creator_' || left(replace(new.id::text, '-', ''), 8)
+  );
+
+  insert into public.profiles (id, display_name, avatar_url, account_type)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data ->> 'display_name', split_part(new.email, '@', 1)),
+    new.raw_user_meta_data ->> 'avatar_url',
+    requested_type
+  )
+  on conflict (id) do nothing;
+
+  if requested_type = 'creator' then
+    insert into public.creator_profiles (user_id, username, bio, style_categories)
+    values (new.id, requested_username, 'Sharing useful outfits and the pieces behind them.', '{}')
+    on conflict (user_id) do nothing;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created_dressi on auth.users;
+create trigger on_auth_user_created_dressi
+  after insert on auth.users
+  for each row execute procedure public.handle_new_dressi_user();
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'creator-media',
+  'creator-media',
+  true,
+  52428800,
+  array['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
 create index if not exists creator_posts_creator_created_idx on public.creator_posts (creator_id, created_at desc);
 create index if not exists creator_posts_style_tags_idx on public.creator_posts using gin (style_tags);
 create index if not exists creator_profiles_styles_idx on public.creator_profiles using gin (style_categories);
@@ -134,6 +193,7 @@ alter table public.creator_closet_items enable row level security;
 alter table public.creator_collections enable row level security;
 alter table public.creator_collection_posts enable row level security;
 alter table public.saved_creator_posts enable row level security;
+alter table public.saved_outfit_references enable row level security;
 
 create policy "Public profiles are readable" on public.profiles for select using (true);
 create policy "Users create their profile" on public.profiles for insert with check (auth.uid() = id);
@@ -160,3 +220,26 @@ create policy "Collection posts are readable" on public.creator_collection_posts
 create policy "Creators manage collection posts" on public.creator_collection_posts for all using (collection_id in (select cc.id from public.creator_collections cc join public.creator_profiles cr on cr.id = cc.creator_id where cr.user_id = auth.uid())) with check (collection_id in (select cc.id from public.creator_collections cc join public.creator_profiles cr on cr.id = cc.creator_id where cr.user_id = auth.uid()));
 create policy "Users read their saved posts" on public.saved_creator_posts for select using (auth.uid() = user_id);
 create policy "Users manage their saved posts" on public.saved_creator_posts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "Users read their saved outfits" on public.saved_outfit_references for select using (auth.uid() = user_id);
+create policy "Users manage their saved outfits" on public.saved_outfit_references for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create policy "Creator media is publicly readable"
+  on storage.objects for select
+  using (bucket_id = 'creator-media');
+
+create policy "Creators upload their media"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'creator-media'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and exists (select 1 from public.creator_profiles where user_id = auth.uid())
+  );
+
+create policy "Creators update their media"
+  on storage.objects for update to authenticated
+  using (bucket_id = 'creator-media' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'creator-media' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "Creators delete their media"
+  on storage.objects for delete to authenticated
+  using (bucket_id = 'creator-media' and (storage.foldername(name))[1] = auth.uid()::text);
