@@ -153,11 +153,15 @@ function App() {
   const accountCreator = useMemo(() => {
     const persistedCreator = creatorDirectory.find((creator) => creator.userId === session?.user?.id);
     if (persistedCreator) return persistedCreator;
+    const displayName = account?.profile?.display_name ?? currentCreator.displayName;
+    const fallbackUsername = session?.user?.email?.split('@')[0] ?? currentCreator.username;
     return {
       ...currentCreator,
-      displayName: account?.profile?.display_name ?? currentCreator.displayName,
-      avatar: account?.profile?.avatar_url ?? currentCreator.avatar,
-      outfitPosts: getCreatorPosts(currentCreator.username, creatorPosts).length,
+      username: account ? fallbackUsername : currentCreator.username,
+      displayName,
+      avatar: account?.profile?.avatar_url
+        ?? (account ? `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(displayName)}` : currentCreator.avatar),
+      outfitPosts: getCreatorPosts(persistedCreator?.username ?? currentCreator.username, creatorPosts).length,
     };
   }, [account, creatorDirectory, creatorPosts, session]);
 
@@ -672,6 +676,11 @@ function App() {
             onUpload={() => navigate('upload')}
             onDiscover={() => navigate('creators')}
             onSignOut={session ? handleSignOut : null}
+            isAuthenticated={!isSupabaseConfigured || Boolean(session)}
+            onAuthenticate={() => {
+              setAuthMode('sign-up');
+              setStage('auth');
+            }}
           />
         )}
       </main>

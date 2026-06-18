@@ -9,6 +9,7 @@ import {
   Heart,
   ImagePlus,
   Layers3,
+  LogIn,
   LogOut,
   MapPin,
   MessageCircle,
@@ -520,7 +521,19 @@ export function CreatorUpload({ creator, accountType, isPublishing = false, onUp
   );
 }
 
-export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onSignOut }) {
+export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onSignOut, isAuthenticated = true, onAuthenticate }) {
+  if (!isAuthenticated) {
+    return (
+      <section className="guest-account">
+        <span><LogIn size={27} /></span>
+        <p className="eyebrow">Your Dressi profile</p>
+        <h1>Save your style across every device.</h1>
+        <p>Create an account to follow creators, save outfits, upload fit checks, and build your closet.</p>
+        <button className="primary-button full" onClick={onAuthenticate} type="button">Create account or log in</button>
+      </section>
+    );
+  }
+
   return (
     <section className="page-stack account-profile">
       <section className="account-hero">
@@ -539,7 +552,7 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
       )}
       <section className="profile-command-list">
         <button onClick={onDiscover} type="button"><UserPlus size={19} /><span><strong>Find creators</strong><small>Personalize your following feed</small></span><ChevronRight size={18} /></button>
-        <button type="button"><ExternalLink size={19} /><span><strong>Connected social profiles</strong><small>{creator.socialLinks.instagram}</small></span><ChevronRight size={18} /></button>
+        <button type="button"><ExternalLink size={19} /><span><strong>Connected social profiles</strong><small>{creator.socialLinks.instagram || 'No social profiles connected'}</small></span><ChevronRight size={18} /></button>
         {onSignOut && <button onClick={onSignOut} type="button"><LogOut size={19} /><span><strong>Log out</strong><small>Sign out of this Dressi account</small></span><ChevronRight size={18} /></button>}
       </section>
     </section>
