@@ -42,20 +42,36 @@ import {
   RecreateThisFit,
   ShopThisFit,
 } from './components/CreatorPlatform.jsx';
+import { CreatorDashboard } from './components/CreatorAnalytics.jsx';
+import { CreatorCollectionsManager } from './components/CreatorEngagement.jsx';
 import { buildPath, parsePath } from './lib/routes.js';
 import { isSupabaseConfigured } from './lib/supabase.js';
 import {
+  createComment,
+  createCreatorCollection,
+  deleteComment,
+  deleteCreatorCollection,
   getAccount,
   getSession,
+  isUuid,
+  loadComments,
+  loadCreatorCollections,
+  loadCreatorInsights,
   loadCreatorPlatform,
+  markNotificationsRead,
   onAuthStateChange,
   publishCreatorPost,
+  setCollectionFollow,
+  setCommentLiked,
+  setCommentPinned,
   setCreatorFollow,
   setOutfitSaved,
   setPostSaved,
   signIn,
   signOut,
   signUp,
+  trackCreatorEvent,
+  updateCreatorCollection,
   upgradeAccountToCreator,
   updateCreatorProfile,
 } from './services/dressiApi.js';
@@ -88,12 +104,7 @@ function LogoWordmark() {
 }
 
 function StatusBar({ dark = false }) {
-  return (
-    <div className={dark ? 'status-bar dark' : 'status-bar'} aria-hidden="true">
-      <span>9:41</span>
-      <span />
-    </div>
-  );
+  return <div className={dark ? 'status-bar dark' : 'status-bar'} aria-hidden="true" />;
 }
 
 function App() {
@@ -119,6 +130,13 @@ function App() {
   const [authFeedback, setAuthFeedback] = useState({ error: '', message: '', loading: false });
   const [isPublishing, setIsPublishing] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [creatorInsights, setCreatorInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [phase3Error, setPhase3Error] = useState('');
+  const [commentsByPost, setCommentsByPost] = useState({});
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [collectionsByCreator, setCollectionsByCreator] = useState({});
+  const [collectionsBusy, setCollectionsBusy] = useState(false);
   const [onboardingAnswers, setOnboardingAnswers] = useState({
     preference: 'All',
     budget: 'Mixed',
@@ -167,6 +185,33 @@ function App() {
       outfitPosts: getCreatorPosts(persistedCreator?.username ?? currentCreator.username, creatorPosts).length,
     };
   }, [account, creatorDirectory, creatorPosts, session]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || route !== 'dashboard') return;
+    refreshCreatorInsights();
+  }, [route, accountCreator.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || route !== 'fit-check') return;
+    refreshComments();
+  }, [route, selectedPost.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    if (route === 'creator') refreshCollections(selectedCreator);
+    if (route === 'collections') refreshCollections(accountCreator);
+  }, [route, selectedCreator.id, accountCreator.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const userId = session?.user?.id ?? null;
+    if (route === 'creator' && selectedCreator.userId !== userId) {
+      trackCreatorEvent({ creatorId: selectedCreator.id, eventType: 'profile_view', userId });
+    }
+    if (route === 'fit-check' && selectedPostCreator.userId !== userId) {
+      trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'post_view', userId });
+    }
+  }, [route, selectedCreator.id, selectedPost.id, session?.user?.id]);
 
   const bagSubtotal = getItemsTotal(bagItems);
   const bagShipping = bagItems.length ? 12 : 0;
@@ -278,7 +323,9 @@ function App() {
       navigate('creator', { username: selectedPost.creatorUsername });
     } else if (route === 'closet') {
       navigate('creator', { username: selectedCreatorUsername });
-    } else if (route === 'creator-settings') {
+    } else if (route === 'creator-settings' || route === 'collections') {
+      navigate('profile');
+    } else if (route === 'dashboard') {
       navigate('profile');
     } else if (route === 'items') {
       navigate('detail', { outfitId: selectedOutfitId });
@@ -328,6 +375,7 @@ function App() {
     try {
       const creator = creatorDirectory.find((item) => item.username === username);
       await setCreatorFollow({ userId: session.user.id, creatorId: creator?.id, following: !wasFollowing });
+      await trackCreatorEvent({ creatorId: creator?.id, eventType: wasFollowing ? 'unfollow' : 'follow', userId: session.user.id });
     } catch (error) {
       setFollowedCreators((current) => wasFollowing
         ? [...current, username]
@@ -350,6 +398,10 @@ function App() {
     if (!isSupabaseConfigured) return;
     try {
       await setPostSaved({ userId: session.user.id, postId, saved: !wasSaved });
+      if (!wasSaved) {
+        const post = creatorPosts.find((item) => item.id === postId);
+        await trackCreatorEvent({ creatorId: post?.creatorId, postId, eventType: 'save', userId: session.user.id });
+      }
     } catch (error) {
       setSavedPostIds((current) => wasSaved
         ? [...current, postId]
@@ -468,12 +520,224 @@ function App() {
     }
   }
 
+  function requirePhase3Auth(message = 'Log in to join the conversation.') {
+    setAuthMode('log-in');
+    setAuthFeedback({ error: '', message, loading: false });
+    setStage('auth');
+  }
+
+  async function refreshCreatorInsights() {
+    if (!isSupabaseConfigured || !isUuid(accountCreator.id)) {
+      setCreatorInsights({ events: [], followers: [], notifications: [] });
+      if (isSupabaseConfigured) setPhase3Error(session ? 'Upgrade to a synced creator account to collect live activity.' : 'Log in with a creator account to collect and view live activity.');
+      return;
+    }
+    setInsightsLoading(true);
+    try {
+      const insights = await loadCreatorInsights({ creatorId: accountCreator.id, userId: session?.user?.id });
+      setCreatorInsights(insights);
+      setPhase3Error('');
+    } catch (error) {
+      setCreatorInsights({ events: [], followers: [], notifications: [] });
+      setPhase3Error(error.message.includes('creator_events') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate live creator data.'
+        : error.message);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
+  async function handleMarkNotificationsRead(notificationId = null) {
+    if (!session) return;
+    try {
+      await markNotificationsRead({ userId: session.user.id, notificationId });
+      await refreshCreatorInsights();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function refreshComments() {
+    if (!isUuid(selectedPost.id)) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: [] }));
+      return;
+    }
+    setCommentsLoading(true);
+    try {
+      const comments = await loadComments({ postId: selectedPost.id, userId: session?.user?.id });
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: comments }));
+      setPhase3Error('');
+    } catch (error) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: [] }));
+      setPhase3Error(error.message.includes('comments') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate comments.'
+        : error.message);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
+
+  async function handleSubmitComment(comment, parentId) {
+    if (!session) {
+      requirePhase3Auth();
+      return;
+    }
+    if (!isUuid(selectedPost.id)) {
+      setAppNotice('Comments are available on creator posts synced from Supabase.');
+      return;
+    }
+    try {
+      await createComment({ postId: selectedPost.id, userId: session.user.id, comment, parentId });
+      await trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'comment', userId: session.user.id });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handleLikeComment(comment) {
+    if (!session) {
+      requirePhase3Auth('Log in to like comments.');
+      return;
+    }
+    try {
+      await setCommentLiked({ commentId: comment.id, userId: session.user.id, liked: !comment.likedByMe });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handlePinComment(comment) {
+    try {
+      await setCommentPinned({ commentId: comment.id, pinned: !comment.pinned });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handleDeleteComment(commentId) {
+    try {
+      await deleteComment(commentId);
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function refreshCollections(creator) {
+    if (!isUuid(creator?.id)) {
+      setCollectionsByCreator((current) => ({ ...current, [creator?.id ?? 'unknown']: [] }));
+      if (route === 'collections') setPhase3Error(session ? 'Upgrade to a synced creator account to manage collections.' : 'Log in with a creator account to manage collections.');
+      return;
+    }
+    try {
+      const collections = await loadCreatorCollections({ creatorId: creator.id, userId: session?.user?.id });
+      setCollectionsByCreator((current) => ({ ...current, [creator.id]: collections }));
+      setPhase3Error('');
+    } catch (error) {
+      setCollectionsByCreator((current) => ({ ...current, [creator.id]: [] }));
+      setPhase3Error(error.message.includes('creator_collection_follows') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate collection follows.'
+        : error.message);
+    }
+  }
+
+  async function handleCreateCollection(name, coverUrl) {
+    if (!session || !isUuid(accountCreator.id)) {
+      requirePhase3Auth('Log in with a creator account to manage collections.');
+      return;
+    }
+    setCollectionsBusy(true);
+    try {
+      await createCreatorCollection({ creatorId: accountCreator.id, name, coverUrl });
+      await refreshCollections(accountCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleSaveCollection(collection) {
+    setCollectionsBusy(true);
+    try {
+      await updateCreatorCollection({ collectionId: collection.id, name: collection.name, coverUrl: collection.cover, postIds: collection.postIds });
+      await refreshCollections(accountCreator);
+      setAppNotice('Collection saved.');
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleDeleteCollection(collectionId) {
+    setCollectionsBusy(true);
+    try {
+      await deleteCreatorCollection(collectionId);
+      await refreshCollections(accountCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleCollectionFollow(collection) {
+    if (!session) {
+      requirePhase3Auth('Log in to follow creator collections.');
+      return;
+    }
+    try {
+      await setCollectionFollow({ collectionId: collection.id, userId: session.user.id, following: !collection.followed });
+      await trackCreatorEvent({ creatorId: selectedCreator.id, eventType: collection.followed ? 'collection_unfollow' : 'collection_follow', userId: session.user.id });
+      await refreshCollections(selectedCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
   function openCreator(username) {
     navigate('creator', { username });
   }
 
   function openPost(postId) {
     navigate('fit-check', { postId });
+  }
+
+  function openShopPost(postId) {
+    const post = creatorPosts.find((item) => item.id === postId);
+    if (isSupabaseConfigured) {
+      trackCreatorEvent({ creatorId: post?.creatorId, postId, eventType: 'product_click', userId: session?.user?.id });
+    }
+    navigate('shop-fit', { postId });
+  }
+
+  function handleProductClick(item) {
+    if (!isSupabaseConfigured) return;
+    trackCreatorEvent({
+      creatorId: selectedPost.creatorId ?? selectedPostCreator.id,
+      postId: selectedPost.id,
+      productId: item.id,
+      eventType: 'product_click',
+      userId: session?.user?.id,
+    });
+  }
+
+  async function handleSharePost() {
+    const url = `${window.location.origin}${buildPath('fit-check', { postId: selectedPost.id })}`;
+    try {
+      if (navigator.share) await navigator.share({ title: selectedPost.title, text: selectedPost.caption, url });
+      else await navigator.clipboard.writeText(url);
+      if (isSupabaseConfigured) {
+        await trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'share', userId: session?.user?.id });
+      }
+      setAppNotice(navigator.share ? 'Fit shared.' : 'Fit link copied.');
+    } catch (error) {
+      if (error.name !== 'AbortError') setAppNotice('Could not share this fit.');
+    }
   }
 
   function addOutfitToBag(outfit = selectedOutfit) {
@@ -573,7 +837,7 @@ function App() {
             togglePostSave={togglePostSave}
             openCreator={openCreator}
             openPost={openPost}
-            shopPost={(postId) => navigate('shop-fit', { postId })}
+            shopPost={openShopPost}
             discoverCreators={() => navigate('creators')}
           />
         )}
@@ -649,23 +913,37 @@ function App() {
           <CreatorProfile
             creator={selectedCreator}
             posts={getCreatorPosts(selectedCreator.username, creatorPosts)}
+            collections={collectionsByCreator[selectedCreator.id] ?? []}
             followed={followedCreators.includes(selectedCreator.username)}
+            canFollowCollections={Boolean(session)}
+            onRequireAuth={() => requirePhase3Auth('Log in to follow creator collections.')}
             onToggleFollow={toggleCreatorFollow}
+            onFollowCollection={handleCollectionFollow}
             onOpenPost={openPost}
             onOpenCloset={(username) => navigate('closet', { username })}
-            onShop={(postId) => navigate('shop-fit', { postId })}
+            onShop={openShopPost}
           />
         )}
         {route === 'fit-check' && (
           <FitCheckDetail
             post={selectedPost}
             creator={selectedPostCreator}
+            comments={commentsByPost[selectedPost.id] ?? []}
+            commentsLoading={commentsLoading}
+            currentUserId={session?.user?.id}
+            isCreatorOwner={Boolean(session?.user?.id && selectedPostCreator.userId === session.user.id)}
             isSaved={savedPostIds.includes(selectedPost.id)}
             isFollowed={followedCreators.includes(selectedPostCreator.username)}
+            onRequireAuth={() => requirePhase3Auth()}
+            onSubmitComment={handleSubmitComment}
+            onLikeComment={handleLikeComment}
+            onPinComment={handlePinComment}
+            onDeleteComment={handleDeleteComment}
+            onShare={handleSharePost}
             onToggleSave={togglePostSave}
             onToggleFollow={toggleCreatorFollow}
             onOpenCreator={openCreator}
-            onShop={(postId) => navigate('shop-fit', { postId })}
+            onShop={openShopPost}
             onRecreate={(postId) => navigate('recreate-fit', { postId })}
           />
         )}
@@ -676,6 +954,7 @@ function App() {
             isSaved={savedPostIds.includes(selectedPost.id)}
             onToggleSave={togglePostSave}
             onAddAll={addProductsToBag}
+            onProductClick={handleProductClick}
             onRecreate={(postId) => navigate('recreate-fit', { postId })}
           />
         )}
@@ -709,6 +988,8 @@ function App() {
             onUpload={() => navigate('upload')}
             onDiscover={() => navigate('creators')}
             onEditCreator={() => navigate('creator-settings')}
+            onOpenDashboard={() => navigate('dashboard')}
+            onManageCollections={() => navigate('collections')}
             onSignOut={session ? handleSignOut : null}
             isAuthenticated={!isSupabaseConfigured || Boolean(session)}
             onAuthenticate={() => {
@@ -723,6 +1004,28 @@ function App() {
             isSaving={isSavingProfile}
             onSave={handleCreatorProfileSave}
             onCancel={() => navigate('profile')}
+          />
+        )}
+        {route === 'dashboard' && (
+          <CreatorDashboard
+            creator={accountCreator}
+            posts={getCreatorPosts(accountCreator.username, creatorPosts)}
+            liveInsights={isSupabaseConfigured ? (creatorInsights ?? { events: [], followers: [], notifications: [] }) : undefined}
+            insightsLoading={insightsLoading}
+            insightsError={phase3Error}
+            onMarkNotificationsRead={handleMarkNotificationsRead}
+            onOpenPost={openPost}
+          />
+        )}
+        {route === 'collections' && (
+          <CreatorCollectionsManager
+            collections={collectionsByCreator[accountCreator.id] ?? []}
+            posts={getCreatorPosts(accountCreator.username, creatorPosts)}
+            busy={collectionsBusy}
+            error={phase3Error}
+            onCreate={handleCreateCollection}
+            onSave={handleSaveCollection}
+            onDelete={handleDeleteCollection}
           />
         )}
       </main>
@@ -913,7 +1216,7 @@ function Onboarding({ answers, setAnswers, onComplete }) {
 }
 
 function AppHeader({ route, onBack, onOpenBag, bagCount }) {
-  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators', 'creator-settings'];
+  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators', 'creator-settings', 'dashboard', 'collections'];
   const titles = {
     home: '',
     search: 'Search',
@@ -931,6 +1234,8 @@ function AppHeader({ route, onBack, onOpenBag, bagCount }) {
     upload: 'Create',
     profile: 'Profile',
     'creator-settings': 'Edit Creator Profile',
+    dashboard: 'Creator Dashboard',
+    collections: 'Manage Collections',
   };
 
   return (
@@ -1657,7 +1962,7 @@ function BottomNav({ route, navigate }) {
   ];
   const activeRoute = route === 'creators' ? 'search'
     : ['creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet'].includes(route) ? 'home'
-      : route === 'creator-settings' ? 'profile' : route;
+      : ['creator-settings', 'dashboard', 'collections'].includes(route) ? 'profile' : route;
 
   return (
     <nav className="bottom-nav" aria-label="Primary">

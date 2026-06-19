@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  BarChart3,
   BadgeCheck,
   Bookmark,
   Camera,
@@ -18,6 +19,7 @@ import {
   Plus,
   Search,
   Save,
+  Share2,
   ShoppingBag,
   Sparkles,
   Trash2,
@@ -27,6 +29,7 @@ import {
   Video,
 } from 'lucide-react';
 import { getCreatorCloset, getCreatorPosts } from '../data/creatorData.js';
+import { CommentsSection, CreatorCollectionShowcase } from './CreatorEngagement.jsx';
 
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -167,7 +170,7 @@ export function CreatorDiscovery({ creators, posts, followed, onToggleFollow, on
   );
 }
 
-export function CreatorProfile({ creator, posts, followed, onToggleFollow, onOpenPost, onOpenCloset, onShop }) {
+export function CreatorProfile({ creator, posts, collections = [], followed, canFollowCollections, onRequireAuth, onToggleFollow, onFollowCollection, onOpenPost, onOpenCloset, onShop }) {
   const [tab, setTab] = useState('Outfits');
   const [notice, setNotice] = useState('');
   const tabs = ['Outfits', 'Videos', 'Closet', 'Collections'];
@@ -214,11 +217,7 @@ export function CreatorProfile({ creator, posts, followed, onToggleFollow, onOpe
         {tabs.map((item) => <button className={tab === item ? 'active' : ''} onClick={() => setTab(item)} key={item} type="button">{item}</button>)}
       </div>
       {tab === 'Collections' ? (
-        <div className="creator-collections">
-          {['Timeless Layers', 'City Weekends', 'Spring Tailoring'].map((name, index) => (
-            <button type="button" key={name} onClick={() => setTab('Outfits')}><img src={posts[index % Math.max(posts.length, 1)]?.image ?? creator.cover} alt="" /><span><strong>{name}</strong><small>{index + 2} saved fits</small></span></button>
-          ))}
-        </div>
+        <CreatorCollectionShowcase collections={collections} posts={posts} canFollow={canFollowCollections} onRequireAuth={onRequireAuth} onFollow={onFollowCollection} onOpenPost={onOpenPost} />
       ) : (
         <div className="creator-post-grid">
           {visiblePosts.map((post) => (
@@ -235,7 +234,7 @@ export function CreatorProfile({ creator, posts, followed, onToggleFollow, onOpe
   );
 }
 
-export function FitCheckDetail({ post, creator, isSaved, isFollowed, onToggleSave, onToggleFollow, onOpenCreator, onShop, onRecreate }) {
+export function FitCheckDetail({ post, creator, comments = [], commentsLoading = false, currentUserId, isCreatorOwner, isSaved, isFollowed, onRequireAuth, onSubmitComment, onLikeComment, onPinComment, onDeleteComment, onShare, onToggleSave, onToggleFollow, onOpenCreator, onShop, onRecreate }) {
   return (
     <article className="fit-check-detail">
       <section className="fit-check-media">
@@ -269,14 +268,26 @@ export function FitCheckDetail({ post, creator, isSaved, isFollowed, onToggleSav
         <div className="social-actions detail-social">
           <span><Heart size={18} /> {compact(post.likes)}</span>
           <span><Bookmark size={18} /> {compact(post.saves)}</span>
-          <span><MessageCircle size={18} /> {compact(post.comments)}</span>
+          <span><MessageCircle size={18} /> {compact(comments.length || post.comments)}</span>
           <button className={isSaved ? 'saved' : ''} onClick={() => onToggleSave(post.id)} type="button"><Bookmark size={19} fill={isSaved ? 'currentColor' : 'none'} /></button>
+          <button onClick={onShare} type="button" aria-label="Share fit"><Share2 size={19} /></button>
         </div>
         <TaggedProductPreview products={post.products} />
         <div className="stacked-actions">
           <button className="primary-button full" onClick={() => onShop(post.id)} type="button"><ShoppingBag size={17} /> Shop This Fit</button>
           <button className="secondary-button full" onClick={() => onRecreate(post.id)} type="button"><Sparkles size={17} /> Recreate This Fit</button>
         </div>
+        <CommentsSection
+          comments={comments}
+          loading={commentsLoading}
+          currentUserId={currentUserId}
+          isCreatorOwner={isCreatorOwner}
+          onRequireAuth={onRequireAuth}
+          onSubmit={onSubmitComment}
+          onLike={onLikeComment}
+          onPin={onPinComment}
+          onDelete={onDeleteComment}
+        />
       </section>
     </article>
   );
@@ -293,7 +304,7 @@ function TaggedProductPreview({ products }) {
   );
 }
 
-export function ShopThisFit({ post, creator, isSaved, onToggleSave, onAddAll, onRecreate }) {
+export function ShopThisFit({ post, creator, isSaved, onToggleSave, onAddAll, onProductClick, onRecreate }) {
   const total = post.products.reduce((sum, item) => sum + item.price, 0);
   return (
     <section className="page-stack shop-fit-page">
@@ -306,7 +317,7 @@ export function ShopThisFit({ post, creator, isSaved, onToggleSave, onAddAll, on
           <article className="tagged-product-row" key={item.id}>
             <span className="product-index">{String(index + 1).padStart(2, '0')}</span>
             <img src={item.image} alt={`${item.brand} ${item.name}`} />
-            <div><small>{item.category}</small><h3>{item.brand}</h3><p>{item.name}</p><span>{item.retailer} / {item.availability}</span></div>
+            <div><small>{item.category}</small><h3>{item.brand}</h3><p>{item.name}</p><span>{item.retailer} / {item.availability}</span>{item.affiliateUrl && <a href={item.affiliateUrl} target="_blank" rel="noreferrer" onClick={() => onProductClick(item)}>Visit retailer</a>}</div>
             <strong>{money(item.price)}</strong>
           </article>
         ))}
@@ -522,7 +533,7 @@ export function CreatorUpload({ creator, accountType, isPublishing = false, onUp
   );
 }
 
-export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onEditCreator, onSignOut, isAuthenticated = true, onAuthenticate }) {
+export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onEditCreator, onOpenDashboard, onManageCollections, onSignOut, isAuthenticated = true, onAuthenticate }) {
   if (!isAuthenticated) {
     return (
       <section className="guest-account">
@@ -544,6 +555,8 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
       <div className="account-summary"><span><strong>{followedCount}</strong><small>Following</small></span><span><strong>2</strong><small>Saved fits</small></span><span><strong>{accountType === 'creator' ? creator.outfitPosts : 0}</strong><small>Posts</small></span></div>
       {accountType === 'creator' ? (
         <section className="profile-command-list">
+          <button onClick={onOpenDashboard} type="button"><BarChart3 size={19} /><span><strong>Creator dashboard</strong><small>Track reach, growth, saves, and product clicks</small></span><ChevronRight size={18} /></button>
+          <button onClick={onManageCollections} type="button"><Layers3 size={19} /><span><strong>Manage collections</strong><small>Group fits into followable style edits</small></span><ChevronRight size={18} /></button>
           <button onClick={() => onOpenCreator(creator.username)} type="button"><Users size={19} /><span><strong>View creator profile</strong><small>See your public profile and posts</small></span><ChevronRight size={18} /></button>
           <button onClick={onEditCreator} type="button"><UserPlus size={19} /><span><strong>Edit creator profile</strong><small>Update your username, bio, photo, and links</small></span><ChevronRight size={18} /></button>
           <button onClick={onUpload} type="button"><Upload size={19} /><span><strong>Upload fit check</strong><small>Share a photo, video, or carousel</small></span><ChevronRight size={18} /></button>
