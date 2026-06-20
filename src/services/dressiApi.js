@@ -25,6 +25,40 @@ function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function isMissingPhase3Relation(error, relation) {
+  const detail = `${error?.code ?? ''} ${error?.message ?? ''}`.toLowerCase();
+  return detail.includes(relation.toLowerCase())
+    && (detail.includes('schema cache') || detail.includes('does not exist') || detail.includes('pgrst205') || detail.includes('42p01'));
+}
+
+function getAnalyticsSessionKey() {
+  const storageKey = 'dressi-analytics-session';
+  let value = window.sessionStorage.getItem(storageKey);
+  if (!value) {
+    value = crypto.randomUUID();
+    window.sessionStorage.setItem(storageKey, value);
+  }
+  return value;
+}
+
+function getAnalyticsVisitorKey() {
+  const storageKey = 'dressi-analytics-visitor';
+  let value = window.localStorage.getItem(storageKey);
+  if (!value) {
+    value = crypto.randomUUID();
+    window.localStorage.setItem(storageKey, value);
+  }
+  return value;
+}
+
+function recentlyTracked(key, cooldownMs = 30000) {
+  const storageKey = `dressi-event-${key}`;
+  const lastTracked = Number(window.sessionStorage.getItem(storageKey) ?? 0);
+  if (Date.now() - lastTracked < cooldownMs) return true;
+  window.sessionStorage.setItem(storageKey, String(Date.now()));
+  return false;
+}
+
 export async function getSession() {
   const client = requireSupabase();
   const { data, error } = await client.auth.getSession();
@@ -150,7 +184,9 @@ export async function loadCreatorPlatform(userId = null) {
     client.from('creator_post_products').select('*').order('sort_order'),
     client.from('products').select('*'),
     client.from('creator_follows').select('follower_id, creator_id'),
-    client.from('saved_creator_posts').select('user_id, post_id'),
+    userId
+      ? client.from('saved_creator_posts').select('user_id, post_id').eq('user_id', userId)
+      : Promise.resolve({ data: [], error: null }),
     userId
       ? client.from('saved_outfit_references').select('user_id, outfit_key').eq('user_id', userId)
       : Promise.resolve({ data: [], error: null }),
@@ -166,11 +202,32 @@ export async function loadCreatorPlatform(userId = null) {
   const saveRows = assertResult(saveResult, 'Load saves') ?? [];
   const outfitSaveRows = assertResult(outfitSaveResult, 'Load saved outfits') ?? [];
 
+  // Phase 3 engagement reads are optional during rollout. Missing new tables or
+  // RPCs must never prevent authentication and the core account from loading.
+  const [engagementResult, postLikeResult, outfitLikeResult, commentResult] = await Promise.all([
+    client.rpc('get_creator_post_engagement'),
+    userId
+      ? client.from('creator_post_likes').select('user_id, post_id').eq('user_id', userId)
+      : Promise.resolve({ data: [], error: null }),
+    userId
+      ? client.from('liked_outfit_references').select('user_id, outfit_key').eq('user_id', userId)
+      : Promise.resolve({ data: [], error: null }),
+    client.from('comments').select('post_id'),
+  ]);
+  const engagementRows = engagementResult.error ? [] : (engagementResult.data ?? []);
+  const postLikeRows = postLikeResult.error ? [] : (postLikeResult.data ?? []);
+  const outfitLikeRows = outfitLikeResult.error ? [] : (outfitLikeResult.data ?? []);
+  const commentRows = commentResult.error ? [] : (commentResult.data ?? []);
+
   const profilesById = new Map(profileRows.map((row) => [row.id, row]));
   const productsById = new Map(productRows.map((row) => [row.id, row]));
   const creatorById = new Map(creatorRows.map((row) => [row.id, row]));
   const followCounts = followRows.reduce((counts, row) => counts.set(row.creator_id, (counts.get(row.creator_id) || 0) + 1), new Map());
-  const saveCounts = saveRows.reduce((counts, row) => counts.set(row.post_id, (counts.get(row.post_id) || 0) + 1), new Map());
+  const engagementByPost = new Map(engagementRows.map((row) => [row.post_id, row]));
+  const saveCounts = new Map(postRows.map((row) => [row.id, Number(engagementByPost.get(row.id)?.saves ?? saveRows.filter((item) => item.post_id === row.id).length)]));
+  const likeCounts = new Map(postRows.map((row) => [row.id, Number(engagementByPost.get(row.id)?.likes ?? postLikeRows.filter((item) => item.post_id === row.id).length)]));
+  const commentCounts = commentRows.reduce((counts, row) => counts.set(row.post_id, (counts.get(row.post_id) || 0) + 1), new Map());
+  engagementRows.forEach((row) => commentCounts.set(row.post_id, Number(row.comments ?? 0)));
   const postCounts = postRows.reduce((counts, row) => counts.set(row.creator_id, (counts.get(row.creator_id) || 0) + 1), new Map());
 
   const creators = creatorRows.map((row) => {
@@ -189,8 +246,9 @@ export async function loadCreatorPlatform(userId = null) {
       followers: followCounts.get(row.id) || 0,
       following: 0,
       outfitPosts: postCounts.get(row.id) || 0,
-      likes: 0,
+      likes: postRows.filter((post) => post.creator_id === row.id).reduce((sum, post) => sum + (likeCounts.get(post.id) || 0), 0),
       saves: postRows.filter((post) => post.creator_id === row.id).reduce((sum, post) => sum + (saveCounts.get(post.id) || 0), 0),
+      purchases: 0,
       status: 'New',
       verified: row.is_verified,
     };
@@ -233,9 +291,9 @@ export async function loadCreatorPlatform(userId = null) {
       occasion: row.occasion || 'Everyday',
       season: row.season || 'All season',
       genderCategory: row.gender_category || 'Unisex',
-      likes: 0,
+      likes: likeCounts.get(row.id) || 0,
       saves: saveCounts.get(row.id) || 0,
-      comments: 0,
+      comments: commentCounts.get(row.id) || 0,
       createdAt: new Date(row.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
       products: productsForPost(row.id),
     };
@@ -249,6 +307,8 @@ export async function loadCreatorPlatform(userId = null) {
       : [],
     savedPostIds: userId ? saveRows.filter((row) => row.user_id === userId).map((row) => row.post_id) : [],
     savedOutfitIds: outfitSaveRows.map((row) => row.outfit_key),
+    likedPostIds: userId ? postLikeRows.filter((row) => row.user_id === userId).map((row) => row.post_id) : [],
+    likedOutfitIds: outfitLikeRows.map((row) => row.outfit_key),
   };
 }
 
@@ -270,12 +330,254 @@ export async function setPostSaved({ userId, postId, saved }) {
   assertResult(result, saved ? 'Save fit check' : 'Remove saved fit check');
 }
 
+export async function setPostLiked({ userId, postId, liked }) {
+  if (!isUuid(postId)) return;
+  const client = requireSupabase();
+  const result = liked
+    ? await client.from('creator_post_likes').insert({ user_id: userId, post_id: postId })
+    : await client.from('creator_post_likes').delete().eq('user_id', userId).eq('post_id', postId);
+  if (result.error && isMissingPhase3Relation(result.error, 'creator_post_likes')) return false;
+  assertResult(result, liked ? 'Like fit check' : 'Unlike fit check');
+  return true;
+}
+
 export async function setOutfitSaved({ userId, outfitId, saved }) {
   const client = requireSupabase();
   const result = saved
     ? await client.from('saved_outfit_references').insert({ user_id: userId, outfit_key: outfitId })
     : await client.from('saved_outfit_references').delete().eq('user_id', userId).eq('outfit_key', outfitId);
   assertResult(result, saved ? 'Save outfit' : 'Remove saved outfit');
+}
+
+export async function setOutfitLiked({ userId, outfitId, liked }) {
+  const client = requireSupabase();
+  const result = liked
+    ? await client.from('liked_outfit_references').insert({ user_id: userId, outfit_key: outfitId })
+    : await client.from('liked_outfit_references').delete().eq('user_id', userId).eq('outfit_key', outfitId);
+  if (result.error && isMissingPhase3Relation(result.error, 'liked_outfit_references')) return false;
+  assertResult(result, liked ? 'Like outfit' : 'Unlike outfit');
+  return true;
+}
+
+export async function trackCreatorEvent({ creatorId, eventType, userId = null, postId = null, productId = null, value = 0 }) {
+  if (!isUuid(creatorId)) return false;
+  const fingerprint = [eventType, creatorId, postId ?? '', productId ?? ''].join(':');
+  if (['profile_view', 'post_view', 'product_click'].includes(eventType) && recentlyTracked(fingerprint)) return false;
+  const client = requireSupabase();
+  const payload = {
+    creator_id: creatorId,
+    viewer_id: isUuid(userId) ? userId : null,
+    post_id: isUuid(postId) ? postId : null,
+    product_id: isUuid(productId) ? productId : null,
+    event_type: eventType,
+    session_key: getAnalyticsSessionKey(),
+  };
+  if (eventType === 'purchase') payload.event_value = Number(value) || 0;
+  const result = await client.from('creator_events').insert(payload);
+  if (result.error) {
+    console.warn(`Track ${eventType}: ${result.error.message}`);
+    return false;
+  }
+  return true;
+}
+
+export async function trackPlatformEvent({ eventType, userId = null, route = null, entityId = null, style = null, metadata = {} }) {
+  const fingerprint = [eventType, route ?? '', entityId ?? '', style ?? ''].join(':');
+  const cooldown = eventType === 'search' ? 1500 : 30000;
+  if (recentlyTracked(`platform:${fingerprint}`, cooldown)) return false;
+  const client = requireSupabase();
+  const result = await client.rpc('track_platform_event', {
+    p_session_key: getAnalyticsSessionKey(),
+    p_visitor_key: getAnalyticsVisitorKey(),
+    p_event_type: eventType,
+    p_user_id: isUuid(userId) ? userId : null,
+    p_route: route,
+    p_entity_id: entityId == null ? null : String(entityId),
+    p_style: style?.trim() || null,
+    p_metadata: metadata,
+  });
+  if (result.error) {
+    console.warn(`Track platform ${eventType}: ${result.error.message}`);
+    return false;
+  }
+  return true;
+}
+
+export async function loadPlatformAnalytics({ startDate = null, endDate = null } = {}) {
+  const client = requireSupabase();
+  const result = await client.rpc('get_platform_analytics', {
+    p_start_date: startDate,
+    p_end_date: endDate,
+  });
+  return assertResult(result, 'Load platform analytics');
+}
+
+export async function loadCreatorInsights({ creatorId, userId = null }) {
+  if (!isUuid(creatorId)) {
+    return { events: [], followers: [], notifications: [] };
+  }
+  const client = requireSupabase();
+  const [eventResult, followerResult, notificationResult] = await Promise.all([
+    client.from('creator_events').select('id, event_type, post_id, product_id, event_value, created_at').eq('creator_id', creatorId).order('created_at'),
+    client.from('creator_follows').select('follower_id, created_at').eq('creator_id', creatorId).order('created_at'),
+    isUuid(userId)
+      ? client.from('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(25)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  return {
+    events: assertResult(eventResult, 'Load creator events') ?? [],
+    followers: assertResult(followerResult, 'Load follower growth') ?? [],
+    notifications: assertResult(notificationResult, 'Load creator notifications') ?? [],
+  };
+}
+
+export async function loadNotifications(userId) {
+  if (!isUuid(userId)) return [];
+  const client = requireSupabase();
+  return assertResult(
+    await client.from('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
+    'Load notifications',
+  ) ?? [];
+}
+
+export async function markNotificationsRead({ userId, notificationId = null }) {
+  const client = requireSupabase();
+  let query = client.from('notifications').update({ read: true }).eq('user_id', userId);
+  if (notificationId) query = query.eq('id', notificationId);
+  assertResult(await query, 'Mark notifications read');
+}
+
+export async function loadComments({ postId, userId = null }) {
+  if (!isUuid(postId)) return [];
+  const client = requireSupabase();
+  const commentRows = assertResult(
+    await client.from('comments').select('*').eq('post_id', postId).order('created_at'),
+    'Load comments',
+  ) ?? [];
+  if (!commentRows.length) return [];
+  const profileIds = [...new Set(commentRows.map((row) => row.user_id))];
+  const commentIds = commentRows.map((row) => row.id);
+  const [profileResult, likeResult] = await Promise.all([
+    client.from('profiles').select('id, display_name, avatar_url').in('id', profileIds),
+    client.from('comment_likes').select('comment_id, user_id').in('comment_id', commentIds),
+  ]);
+  const profiles = new Map((assertResult(profileResult, 'Load comment authors') ?? []).map((row) => [row.id, row]));
+  const likes = assertResult(likeResult, 'Load comment likes') ?? [];
+  return commentRows.map((row) => {
+    const profile = profiles.get(row.user_id) ?? {};
+    const commentLikes = likes.filter((item) => item.comment_id === row.id);
+    return {
+      id: row.id,
+      postId: row.post_id,
+      userId: row.user_id,
+      parentId: row.parent_comment_id,
+      comment: row.comment,
+      pinned: row.is_pinned,
+      createdAt: row.created_at,
+      authorName: profile.display_name || 'Dressi member',
+      authorAvatar: profile.avatar_url || `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(profile.display_name || 'Dressi member')}`,
+      likes: commentLikes.length,
+      likedByMe: isUuid(userId) && commentLikes.some((item) => item.user_id === userId),
+    };
+  });
+}
+
+export async function createComment({ postId, userId, comment, parentId = null }) {
+  if (!isUuid(postId) || !isUuid(userId)) throw new Error('Log in to comment on this fit.');
+  const client = requireSupabase();
+  return assertResult(
+    await client.from('comments').insert({
+      post_id: postId,
+      user_id: userId,
+      parent_comment_id: isUuid(parentId) ? parentId : null,
+      comment: comment.trim(),
+    }).select().single(),
+    'Post comment',
+  );
+}
+
+export async function setCommentLiked({ commentId, userId, liked }) {
+  const client = requireSupabase();
+  const result = liked
+    ? await client.from('comment_likes').insert({ comment_id: commentId, user_id: userId })
+    : await client.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', userId);
+  assertResult(result, liked ? 'Like comment' : 'Unlike comment');
+}
+
+export async function setCommentPinned({ commentId, pinned }) {
+  const client = requireSupabase();
+  assertResult(await client.from('comments').update({ is_pinned: pinned }).eq('id', commentId), pinned ? 'Pin comment' : 'Unpin comment');
+}
+
+export async function deleteComment(commentId) {
+  const client = requireSupabase();
+  assertResult(await client.from('comments').delete().eq('id', commentId), 'Delete comment');
+}
+
+export async function loadCreatorCollections({ creatorId, userId = null }) {
+  if (!isUuid(creatorId)) return [];
+  const client = requireSupabase();
+  const collectionRows = assertResult(
+    await client.from('creator_collections').select('*').eq('creator_id', creatorId).order('created_at', { ascending: false }),
+    'Load creator collections',
+  ) ?? [];
+  if (!collectionRows.length) {
+    assertResult(await client.from('creator_collection_follows').select('collection_id').limit(1), 'Load collection follows');
+    return [];
+  }
+  const collectionIds = collectionRows.map((row) => row.id);
+  const [postResult, followResult] = await Promise.all([
+    client.from('creator_collection_posts').select('collection_id, post_id, sort_order').in('collection_id', collectionIds).order('sort_order'),
+    client.from('creator_collection_follows').select('collection_id, user_id').in('collection_id', collectionIds),
+  ]);
+  const postLinks = assertResult(postResult, 'Load collection posts') ?? [];
+  const follows = assertResult(followResult, 'Load collection follows') ?? [];
+  return collectionRows.map((row) => ({
+    id: row.id,
+    creatorId: row.creator_id,
+    name: row.name,
+    cover: row.cover_url,
+    postIds: postLinks.filter((item) => item.collection_id === row.id).map((item) => item.post_id),
+    followers: follows.filter((item) => item.collection_id === row.id).length,
+    followed: isUuid(userId) && follows.some((item) => item.collection_id === row.id && item.user_id === userId),
+  }));
+}
+
+export async function createCreatorCollection({ creatorId, name, coverUrl = null }) {
+  const client = requireSupabase();
+  return assertResult(
+    await client.from('creator_collections').insert({ creator_id: creatorId, name: name.trim(), cover_url: coverUrl }).select().single(),
+    'Create collection',
+  );
+}
+
+export async function updateCreatorCollection({ collectionId, name, coverUrl = null, postIds = [] }) {
+  const client = requireSupabase();
+  assertResult(
+    await client.from('creator_collections').update({ name: name.trim(), cover_url: coverUrl }).eq('id', collectionId),
+    'Update collection',
+  );
+  assertResult(await client.from('creator_collection_posts').delete().eq('collection_id', collectionId), 'Reset collection posts');
+  const validPostIds = postIds.filter(isUuid);
+  if (validPostIds.length) {
+    assertResult(
+      await client.from('creator_collection_posts').insert(validPostIds.map((postId, index) => ({ collection_id: collectionId, post_id: postId, sort_order: index }))),
+      'Save collection posts',
+    );
+  }
+}
+
+export async function deleteCreatorCollection(collectionId) {
+  const client = requireSupabase();
+  assertResult(await client.from('creator_collections').delete().eq('id', collectionId), 'Delete collection');
+}
+
+export async function setCollectionFollow({ collectionId, userId, following }) {
+  const client = requireSupabase();
+  const result = following
+    ? await client.from('creator_collection_follows').insert({ collection_id: collectionId, user_id: userId })
+    : await client.from('creator_collection_follows').delete().eq('collection_id', collectionId).eq('user_id', userId);
+  assertResult(result, following ? 'Follow collection' : 'Unfollow collection');
 }
 
 function cleanFileName(fileName) {

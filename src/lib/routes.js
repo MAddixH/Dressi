@@ -6,6 +6,10 @@ export const ROUTES = {
   'creator-settings': '/profile/creator',
   creators: '/creators',
   upload: '/creator/upload',
+  dashboard: '/creator/dashboard',
+  earnings: '/creator/earnings',
+  notifications: '/notifications',
+  collections: '/creator/collections/manage',
   bag: '/bag',
   checkout: '/checkout',
 };
@@ -25,6 +29,9 @@ export function parsePath(pathname) {
   const parts = pathname.split('/').filter(Boolean);
   if (parts[0] === 'profile' && parts[1] === 'creator') return { route: 'creator-settings' };
   if (parts[0] === 'creator' && parts[1] === 'upload') return { route: 'upload' };
+  if (parts[0] === 'creator' && parts[1] === 'dashboard') return { route: 'dashboard' };
+  if (parts[0] === 'creator' && parts[1] === 'earnings') return { route: 'earnings' };
+  if (parts[0] === 'creator' && parts[1] === 'collections' && parts[2] === 'manage') return { route: 'collections' };
   if (parts[0] === 'creator' && parts[1] && parts[2] === 'closet') {
     return { route: 'closet', username: parts[1] };
   }

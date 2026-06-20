@@ -27,6 +27,7 @@ import {
   creators as seedCreators,
   creatorPosts as initialCreatorPosts,
   currentCreator,
+  demoCommentsByPost,
   getCreator,
   getCreatorPosts,
 } from './data/creatorData.js';
@@ -42,20 +43,42 @@ import {
   RecreateThisFit,
   ShopThisFit,
 } from './components/CreatorPlatform.jsx';
+import { CreatorDashboard, CreatorEarnings, NotificationsCenter } from './components/CreatorAnalytics.jsx';
+import { creatorNotifications } from './data/creatorAnalyticsData.js';
+import { CreatorCollectionsManager } from './components/CreatorEngagement.jsx';
 import { buildPath, parsePath } from './lib/routes.js';
 import { isSupabaseConfigured } from './lib/supabase.js';
 import {
+  createComment,
+  createCreatorCollection,
+  deleteComment,
+  deleteCreatorCollection,
   getAccount,
   getSession,
+  isUuid,
+  loadComments,
+  loadCreatorCollections,
+  loadCreatorInsights,
   loadCreatorPlatform,
+  loadPlatformAnalytics,
+  loadNotifications,
+  markNotificationsRead,
   onAuthStateChange,
   publishCreatorPost,
+  setCollectionFollow,
+  setCommentLiked,
+  setCommentPinned,
   setCreatorFollow,
   setOutfitSaved,
+  setOutfitLiked,
+  setPostLiked,
   setPostSaved,
   signIn,
   signOut,
   signUp,
+  trackCreatorEvent,
+  trackPlatformEvent,
+  updateCreatorCollection,
   upgradeAccountToCreator,
   updateCreatorProfile,
 } from './services/dressiApi.js';
@@ -73,6 +96,22 @@ function getItemsTotal(items) {
   return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 }
 
+function readLocalEngagement(kind, userId = 'guest') {
+  try {
+    return JSON.parse(window.localStorage.getItem(`dressi-${kind}-${userId}`) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalEngagement(kind, userId, ids) {
+  try {
+    window.localStorage.setItem(`dressi-${kind}-${userId ?? 'guest'}`, JSON.stringify(ids));
+  } catch {
+    // Storage can be unavailable in private browsing; in-memory state still works.
+  }
+}
+
 function LogoMark({ compact = false }) {
   return (
     <img
@@ -88,12 +127,7 @@ function LogoWordmark() {
 }
 
 function StatusBar({ dark = false }) {
-  return (
-    <div className={dark ? 'status-bar dark' : 'status-bar'} aria-hidden="true">
-      <span>9:41</span>
-      <span />
-    </div>
-  );
+  return <div className={dark ? 'status-bar dark' : 'status-bar'} aria-hidden="true" />;
 }
 
 function App() {
@@ -107,9 +141,11 @@ function App() {
   const [selectedPostId, setSelectedPostId] = useState(initialPath.postId ?? initialCreatorPosts[0].id);
   const [creatorPosts, setCreatorPosts] = useState(initialCreatorPosts);
   const [creatorDirectory, setCreatorDirectory] = useState(seedCreators);
-  const [followedCreators, setFollowedCreators] = useState(['oldmoneyjake']);
-  const [savedPostIds, setSavedPostIds] = useState(['spring-city-fit']);
-  const [savedIds, setSavedIds] = useState([outfits[0].id, outfits[2].id]);
+  const [followedCreators, setFollowedCreators] = useState(isSupabaseConfigured ? [] : ['oldmoneyjake']);
+  const [savedPostIds, setSavedPostIds] = useState(isSupabaseConfigured ? [] : ['spring-city-fit']);
+  const [likedPostIds, setLikedPostIds] = useState(isSupabaseConfigured ? [] : ['spring-city-fit']);
+  const [savedIds, setSavedIds] = useState(isSupabaseConfigured ? [] : [outfits[0].id, outfits[2].id]);
+  const [likedOutfitIds, setLikedOutfitIds] = useState(isSupabaseConfigured ? [] : [outfits[0].id]);
   const [bagItems, setBagItems] = useState([]);
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [session, setSession] = useState(null);
@@ -119,6 +155,15 @@ function App() {
   const [authFeedback, setAuthFeedback] = useState({ error: '', message: '', loading: false });
   const [isPublishing, setIsPublishing] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [creatorInsights, setCreatorInsights] = useState(null);
+  const [platformInsights, setPlatformInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [phase3Error, setPhase3Error] = useState('');
+  const [commentsByPost, setCommentsByPost] = useState(isSupabaseConfigured ? {} : demoCommentsByPost);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [notificationItems, setNotificationItems] = useState(isSupabaseConfigured ? [] : creatorNotifications);
+  const [collectionsByCreator, setCollectionsByCreator] = useState({});
+  const [collectionsBusy, setCollectionsBusy] = useState(false);
   const [onboardingAnswers, setOnboardingAnswers] = useState({
     preference: 'All',
     budget: 'Mixed',
@@ -168,6 +213,64 @@ function App() {
     };
   }, [account, creatorDirectory, creatorPosts, session]);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !['dashboard', 'earnings'].includes(route)) return;
+    refreshCreatorInsights();
+  }, [route, accountCreator.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || route !== 'notifications' || !session?.user?.id) return;
+    refreshNotifications();
+  }, [route, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || route !== 'fit-check') return;
+    refreshComments();
+  }, [route, selectedPost.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    if (route === 'creator') refreshCollections(selectedCreator);
+    if (route === 'collections') refreshCollections(accountCreator);
+  }, [route, selectedCreator.id, accountCreator.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const userId = session?.user?.id ?? null;
+    if (route === 'creator' && selectedCreator.userId !== userId) {
+      trackCreatorEvent({ creatorId: selectedCreator.id, eventType: 'profile_view', userId });
+    }
+    if (route === 'fit-check' && selectedPostCreator.userId !== userId) {
+      trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'post_view', userId });
+    }
+  }, [route, selectedCreator.id, selectedPost.id, session?.user?.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || stage !== 'app') return;
+    const style = route === 'creator'
+      ? selectedCreator.tags?.[0]
+      : route === 'fit-check' || route === 'shop-fit'
+        ? selectedPost.tags?.[0]
+        : route === 'detail' || route === 'items'
+          ? selectedOutfit.tags?.[0]
+          : null;
+    const entityId = route === 'creator'
+      ? selectedCreator.id
+      : route === 'fit-check' || route === 'shop-fit'
+        ? selectedPost.id
+        : route === 'detail' || route === 'items'
+          ? selectedOutfit.id
+          : null;
+    trackPlatformEvent({
+      eventType: 'page_view',
+      userId: session?.user?.id,
+      route,
+      entityId,
+      style,
+      metadata: { path: window.location.pathname },
+    });
+  }, [stage, route, selectedCreator.id, selectedPost.id, selectedOutfit.id, session?.user?.id]);
+
   const bagSubtotal = getItemsTotal(bagItems);
   const bagShipping = bagItems.length ? 12 : 0;
   const bagTax = bagSubtotal * 0.0825;
@@ -192,13 +295,30 @@ function App() {
       setFollowedCreators(platform.followedUsernames);
       setSavedPostIds(platform.savedPostIds);
       setSavedIds(platform.savedOutfitIds);
+      const localPostLikes = readLocalEngagement('liked-posts', activeSession?.user?.id);
+      const localOutfitLikes = readLocalEngagement('liked-outfits', activeSession?.user?.id);
+      setLikedPostIds([...new Set([...(platform.likedPostIds ?? []), ...localPostLikes])]);
+      setLikedOutfitIds([...new Set([...(platform.likedOutfitIds ?? []), ...localOutfitLikes])]);
+      if (activeSession?.user?.id) {
+        const unsyncedPostLikes = localPostLikes.filter((postId) => isUuid(postId) && !(platform.likedPostIds ?? []).includes(postId));
+        const unsyncedOutfitLikes = localOutfitLikes.filter((outfitId) => !(platform.likedOutfitIds ?? []).includes(outfitId));
+        await Promise.allSettled([
+          ...unsyncedPostLikes.map((postId) => setPostLiked({ userId: activeSession.user.id, postId, liked: true })),
+          ...unsyncedOutfitLikes.map((outfitId) => setOutfitLiked({ userId: activeSession.user.id, outfitId, liked: true })),
+        ]);
+      }
 
       if (activeSession?.user?.id) {
-        const nextAccount = await getAccount(activeSession.user.id);
+        const [nextAccount, nextNotifications] = await Promise.all([
+          getAccount(activeSession.user.id),
+          loadNotifications(activeSession.user.id).catch(() => []),
+        ]);
         setAccount(nextAccount);
+        setNotificationItems(nextNotifications);
         setAccountType(nextAccount.profile.account_type);
       } else {
         setAccount(null);
+        setNotificationItems([]);
       }
       setBackendState('live');
     } catch (error) {
@@ -278,8 +398,14 @@ function App() {
       navigate('creator', { username: selectedPost.creatorUsername });
     } else if (route === 'closet') {
       navigate('creator', { username: selectedCreatorUsername });
-    } else if (route === 'creator-settings') {
+    } else if (route === 'creator-settings' || route === 'collections') {
       navigate('profile');
+    } else if (route === 'earnings') {
+      navigate('dashboard');
+    } else if (route === 'dashboard') {
+      navigate('profile');
+    } else if (route === 'notifications') {
+      navigate('home');
     } else if (route === 'items') {
       navigate('detail', { outfitId: selectedOutfitId });
     } else {
@@ -305,10 +431,35 @@ function App() {
     if (!isSupabaseConfigured) return;
     try {
       await setOutfitSaved({ userId: session.user.id, outfitId, saved: !wasSaved });
+      if (!wasSaved) {
+        const outfit = outfits.find((item) => item.id === outfitId);
+        await trackPlatformEvent({ eventType: 'style_save', userId: session.user.id, route: 'detail', entityId: outfitId, style: outfit?.tags?.[0] });
+      }
     } catch (error) {
       setSavedIds((current) => wasSaved
         ? [...current, outfitId]
         : current.filter((id) => id !== outfitId));
+      setAppNotice(error.message);
+    }
+  }
+
+  async function toggleOutfitLike(outfitId) {
+    const wasLiked = likedOutfitIds.includes(outfitId);
+    if (isSupabaseConfigured && !session) {
+      requirePhase3Auth('Log in to like outfits.');
+      return;
+    }
+    const nextLiked = wasLiked ? likedOutfitIds.filter((id) => id !== outfitId) : [...likedOutfitIds, outfitId];
+    setLikedOutfitIds(nextLiked);
+    writeLocalEngagement('liked-outfits', session?.user?.id, nextLiked);
+    if (!isSupabaseConfigured) return;
+    try {
+      const persisted = await setOutfitLiked({ userId: session.user.id, outfitId, liked: !wasLiked });
+      if (persisted === false) setAppNotice('Like saved on this device. Apply the latest Phase 3 migration to sync it across devices.');
+    } catch (error) {
+      const rollback = wasLiked ? [...nextLiked, outfitId] : nextLiked.filter((id) => id !== outfitId);
+      setLikedOutfitIds(rollback);
+      writeLocalEngagement('liked-outfits', session?.user?.id, rollback);
       setAppNotice(error.message);
     }
   }
@@ -328,6 +479,7 @@ function App() {
     try {
       const creator = creatorDirectory.find((item) => item.username === username);
       await setCreatorFollow({ userId: session.user.id, creatorId: creator?.id, following: !wasFollowing });
+      await trackCreatorEvent({ creatorId: creator?.id, eventType: wasFollowing ? 'unfollow' : 'follow', userId: session.user.id });
     } catch (error) {
       setFollowedCreators((current) => wasFollowing
         ? [...current, username]
@@ -347,13 +499,43 @@ function App() {
     setSavedPostIds((current) => wasSaved
       ? current.filter((item) => item !== postId)
       : [...current, postId]);
+    setCreatorPosts((current) => current.map((post) => post.id === postId ? { ...post, saves: Math.max(0, post.saves + (wasSaved ? -1 : 1)) } : post));
     if (!isSupabaseConfigured) return;
     try {
       await setPostSaved({ userId: session.user.id, postId, saved: !wasSaved });
+      if (!wasSaved) {
+        const post = creatorPosts.find((item) => item.id === postId);
+        await trackCreatorEvent({ creatorId: post?.creatorId, postId, eventType: 'save', userId: session.user.id });
+        await trackPlatformEvent({ eventType: 'style_save', userId: session.user.id, route: 'fit-check', entityId: postId, style: post?.tags?.[0] });
+      }
     } catch (error) {
       setSavedPostIds((current) => wasSaved
         ? [...current, postId]
         : current.filter((item) => item !== postId));
+      setCreatorPosts((current) => current.map((post) => post.id === postId ? { ...post, saves: Math.max(0, post.saves + (wasSaved ? 1 : -1)) } : post));
+      setAppNotice(error.message);
+    }
+  }
+
+  async function togglePostLike(postId) {
+    const wasLiked = likedPostIds.includes(postId);
+    if (isSupabaseConfigured && !session) {
+      requirePhase3Auth('Log in to like creator fits.');
+      return;
+    }
+    const nextLiked = wasLiked ? likedPostIds.filter((id) => id !== postId) : [...likedPostIds, postId];
+    setLikedPostIds(nextLiked);
+    writeLocalEngagement('liked-posts', session?.user?.id, nextLiked);
+    setCreatorPosts((current) => current.map((post) => post.id === postId ? { ...post, likes: Math.max(0, post.likes + (wasLiked ? -1 : 1)) } : post));
+    if (!isSupabaseConfigured || !isUuid(postId)) return;
+    try {
+      const persisted = await setPostLiked({ userId: session.user.id, postId, liked: !wasLiked });
+      if (persisted === false) setAppNotice('Like saved on this device. Apply the latest Phase 3 migration to sync it across devices.');
+    } catch (error) {
+      const rollback = wasLiked ? [...nextLiked, postId] : nextLiked.filter((id) => id !== postId);
+      setLikedPostIds(rollback);
+      writeLocalEngagement('liked-posts', session?.user?.id, rollback);
+      setCreatorPosts((current) => current.map((post) => post.id === postId ? { ...post, likes: Math.max(0, post.likes + (wasLiked ? 1 : -1)) } : post));
       setAppNotice(error.message);
     }
   }
@@ -444,6 +626,12 @@ function App() {
     setSession(null);
     setAccount(null);
     setAccountType('shopper');
+    setFollowedCreators([]);
+    setSavedPostIds([]);
+    setLikedPostIds([]);
+    setSavedIds([]);
+    setLikedOutfitIds([]);
+    setNotificationItems([]);
     setStage('splash');
     window.history.replaceState({}, '', '/');
   }
@@ -468,12 +656,280 @@ function App() {
     }
   }
 
+  function requirePhase3Auth(message = 'Log in to join the conversation.') {
+    setAuthMode('log-in');
+    setAuthFeedback({ error: '', message, loading: false });
+    setStage('auth');
+  }
+
+  async function refreshCreatorInsights() {
+    if (!isSupabaseConfigured || !isUuid(accountCreator.id)) {
+      setCreatorInsights({ events: [], followers: [], notifications: [] });
+      setPlatformInsights(null);
+      if (isSupabaseConfigured) setPhase3Error(session ? 'Upgrade to a synced creator account to collect live activity.' : 'Log in with a creator account to collect and view live activity.');
+      return;
+    }
+    setInsightsLoading(true);
+    try {
+      const [insights, platform] = await Promise.all([
+        loadCreatorInsights({ creatorId: accountCreator.id, userId: session?.user?.id }),
+        session?.user?.id ? loadPlatformAnalytics() : Promise.resolve(null),
+      ]);
+      setCreatorInsights(insights);
+      setNotificationItems(insights.notifications);
+      setPlatformInsights(platform);
+      setPhase3Error('');
+    } catch (error) {
+      setCreatorInsights({ events: [], followers: [], notifications: [] });
+      setPlatformInsights(null);
+      setPhase3Error(error.message.includes('creator_events') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate live creator data.'
+        : error.message);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
+  async function refreshNotifications() {
+    if (!isSupabaseConfigured || !session?.user?.id) return;
+    try {
+      setNotificationItems(await loadNotifications(session.user.id));
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  function handleSearchAnalytics(query, source = 'typed') {
+    if (!isSupabaseConfigured || !query.trim()) return;
+    trackPlatformEvent({
+      eventType: 'search',
+      userId: session?.user?.id,
+      route: 'search',
+      style: query.trim(),
+      metadata: { source },
+    });
+  }
+
+  async function handleMarkNotificationsRead(notificationId = null) {
+    setNotificationItems((current) => current.map((item) => (!notificationId || item.id === notificationId) ? { ...item, unread: false, read: true } : item));
+    if (!isSupabaseConfigured || !session) return;
+    try {
+      await markNotificationsRead({ userId: session.user.id, notificationId });
+      await refreshNotifications();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function refreshComments() {
+    if (!isUuid(selectedPost.id)) {
+      return;
+    }
+    setCommentsLoading(true);
+    try {
+      const comments = await loadComments({ postId: selectedPost.id, userId: session?.user?.id });
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: comments }));
+      setPhase3Error('');
+    } catch (error) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: [] }));
+      setPhase3Error(error.message.includes('comments') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate comments.'
+        : error.message);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
+
+  async function handleSubmitComment(comment, parentId) {
+    if (!isSupabaseConfigured || !isUuid(selectedPost.id)) {
+      const nextComment = {
+        id: `comment-${Date.now()}`,
+        postId: selectedPost.id,
+        userId: 'demo-user',
+        parentId,
+        comment,
+        pinned: false,
+        createdAt: new Date().toISOString(),
+        authorName: currentCreator.displayName,
+        authorAvatar: currentCreator.avatar,
+        likes: 0,
+        likedByMe: false,
+      };
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: [...(current[selectedPost.id] ?? []), nextComment] }));
+      return;
+    }
+    if (!session) {
+      requirePhase3Auth();
+      return;
+    }
+    if (!isUuid(selectedPost.id)) {
+      setAppNotice('Comments are available on creator posts synced from Supabase.');
+      return;
+    }
+    try {
+      await createComment({ postId: selectedPost.id, userId: session.user.id, comment, parentId });
+      await trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'comment', userId: session.user.id });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handleLikeComment(comment) {
+    if (!isSupabaseConfigured || !isUuid(selectedPost.id)) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: (current[selectedPost.id] ?? []).map((item) => item.id === comment.id ? { ...item, likedByMe: !item.likedByMe, likes: Math.max(0, item.likes + (item.likedByMe ? -1 : 1)) } : item) }));
+      return;
+    }
+    if (!session) {
+      requirePhase3Auth('Log in to like comments.');
+      return;
+    }
+    try {
+      await setCommentLiked({ commentId: comment.id, userId: session.user.id, liked: !comment.likedByMe });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handlePinComment(comment) {
+    if (!isSupabaseConfigured || !isUuid(selectedPost.id)) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: (current[selectedPost.id] ?? []).map((item) => item.id === comment.id ? { ...item, pinned: !item.pinned } : item) }));
+      return;
+    }
+    try {
+      await setCommentPinned({ commentId: comment.id, pinned: !comment.pinned });
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function handleDeleteComment(commentId) {
+    if (!isSupabaseConfigured || !isUuid(selectedPost.id)) {
+      setCommentsByPost((current) => ({ ...current, [selectedPost.id]: (current[selectedPost.id] ?? []).filter((item) => item.id !== commentId && item.parentId !== commentId) }));
+      return;
+    }
+    try {
+      await deleteComment(commentId);
+      await refreshComments();
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
+  async function refreshCollections(creator) {
+    if (!isUuid(creator?.id)) {
+      setCollectionsByCreator((current) => ({ ...current, [creator?.id ?? 'unknown']: [] }));
+      if (route === 'collections') setPhase3Error(session ? 'Upgrade to a synced creator account to manage collections.' : 'Log in with a creator account to manage collections.');
+      return;
+    }
+    try {
+      const collections = await loadCreatorCollections({ creatorId: creator.id, userId: session?.user?.id });
+      setCollectionsByCreator((current) => ({ ...current, [creator.id]: collections }));
+      setPhase3Error('');
+    } catch (error) {
+      setCollectionsByCreator((current) => ({ ...current, [creator.id]: [] }));
+      setPhase3Error(error.message.includes('creator_collection_follows') || error.message.includes('schema cache')
+        ? 'Apply the Phase 3 Supabase migration to activate collection follows.'
+        : error.message);
+    }
+  }
+
+  async function handleCreateCollection(name, coverUrl) {
+    if (!session || !isUuid(accountCreator.id)) {
+      requirePhase3Auth('Log in with a creator account to manage collections.');
+      return;
+    }
+    setCollectionsBusy(true);
+    try {
+      await createCreatorCollection({ creatorId: accountCreator.id, name, coverUrl });
+      await refreshCollections(accountCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleSaveCollection(collection) {
+    setCollectionsBusy(true);
+    try {
+      await updateCreatorCollection({ collectionId: collection.id, name: collection.name, coverUrl: collection.cover, postIds: collection.postIds });
+      await refreshCollections(accountCreator);
+      setAppNotice('Collection saved.');
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleDeleteCollection(collectionId) {
+    setCollectionsBusy(true);
+    try {
+      await deleteCreatorCollection(collectionId);
+      await refreshCollections(accountCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    } finally {
+      setCollectionsBusy(false);
+    }
+  }
+
+  async function handleCollectionFollow(collection) {
+    if (!session) {
+      requirePhase3Auth('Log in to follow creator collections.');
+      return;
+    }
+    try {
+      await setCollectionFollow({ collectionId: collection.id, userId: session.user.id, following: !collection.followed });
+      await trackCreatorEvent({ creatorId: selectedCreator.id, eventType: collection.followed ? 'collection_unfollow' : 'collection_follow', userId: session.user.id });
+      await refreshCollections(selectedCreator);
+    } catch (error) {
+      setAppNotice(error.message);
+    }
+  }
+
   function openCreator(username) {
     navigate('creator', { username });
   }
 
   function openPost(postId) {
     navigate('fit-check', { postId });
+  }
+
+  function openShopPost(postId) {
+    const post = creatorPosts.find((item) => item.id === postId);
+    if (isSupabaseConfigured) {
+      trackCreatorEvent({ creatorId: post?.creatorId, postId, eventType: 'product_click', userId: session?.user?.id });
+    }
+    navigate('shop-fit', { postId });
+  }
+
+  function handleProductClick(item) {
+    if (!isSupabaseConfigured) return;
+    trackCreatorEvent({
+      creatorId: selectedPost.creatorId ?? selectedPostCreator.id,
+      postId: selectedPost.id,
+      productId: item.id,
+      eventType: 'product_click',
+      userId: session?.user?.id,
+    });
+  }
+
+  async function handleSharePost() {
+    const url = `${window.location.origin}${buildPath('fit-check', { postId: selectedPost.id })}`;
+    try {
+      if (navigator.share) await navigator.share({ title: selectedPost.title, text: selectedPost.caption, url });
+      else await navigator.clipboard.writeText(url);
+      if (isSupabaseConfigured) {
+        await trackCreatorEvent({ creatorId: selectedPost.creatorId ?? selectedPostCreator.id, postId: selectedPost.id, eventType: 'share', userId: session?.user?.id });
+      }
+      setAppNotice(navigator.share ? 'Fit shared.' : 'Fit link copied.');
+    } catch (error) {
+      if (error.name !== 'AbortError') setAppNotice('Could not share this fit.');
+    }
   }
 
   function addOutfitToBag(outfit = selectedOutfit) {
@@ -509,6 +965,28 @@ function App() {
 
   function removeBagItem(itemId) {
     setBagItems((current) => current.filter((item) => item.id !== itemId));
+  }
+
+  async function handlePlaceOrder() {
+    setOrderPlaced(true);
+    const attributedItems = bagItems.map((item) => ({
+      item,
+      post: creatorPosts.find((post) => post.id === item.outfitId),
+    })).filter(({ post }) => post);
+    if (!isSupabaseConfigured) {
+      if (attributedItems.length) {
+        setNotificationItems((current) => [{ id: `purchase-${Date.now()}`, type: 'purchase', title: `New purchase attributed to ${attributedItems[0].post.title}.`, time: 'Now', unread: true }, ...current]);
+      }
+      return;
+    }
+    await Promise.all(attributedItems.map(({ item, post }) => trackCreatorEvent({
+      creatorId: post.creatorId,
+      postId: post.id,
+      productId: item.id,
+      eventType: 'purchase',
+      userId: session?.user?.id,
+      value: item.price * item.quantity * 0.08,
+    })));
   }
 
   if (stage === 'splash') {
@@ -550,7 +1028,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      <AppHeader route={route} onBack={goBack} onOpenBag={() => navigate('bag')} bagCount={bagItems.length} />
+      <AppHeader route={route} onBack={goBack} onOpenBag={() => navigate('bag')} onOpenNotifications={() => navigate('notifications')} bagCount={bagItems.length} unreadNotifications={notificationItems.filter((item) => item.unread ?? !item.read).length} />
       <main className="screen">
         {appNotice && (
           <button className="app-notice" onClick={() => setAppNotice('')} type="button">
@@ -569,15 +1047,19 @@ function App() {
             creators={creatorDirectory}
             followedCreators={followedCreators}
             savedPostIds={savedPostIds}
+            likedPostIds={likedPostIds}
             toggleCreatorFollow={toggleCreatorFollow}
             togglePostSave={togglePostSave}
+            togglePostLike={togglePostLike}
+            likedOutfitIds={likedOutfitIds}
+            toggleOutfitLike={toggleOutfitLike}
             openCreator={openCreator}
             openPost={openPost}
-            shopPost={(postId) => navigate('shop-fit', { postId })}
+            shopPost={openShopPost}
             discoverCreators={() => navigate('creators')}
           />
         )}
-        {route === 'search' && <SearchStyles openOutfit={openOutfit} onDiscoverCreators={() => navigate('creators')} />}
+        {route === 'search' && <SearchStyles openOutfit={openOutfit} onDiscoverCreators={() => navigate('creators')} onSearch={handleSearchAnalytics} />}
         {route === 'saved' && (
           <SavedOutfits
             savedOutfits={savedOutfits}
@@ -591,7 +1073,9 @@ function App() {
           <OutfitDetail
             outfit={selectedOutfit}
             isSaved={savedIds.includes(selectedOutfit.id)}
+            isLiked={likedOutfitIds.includes(selectedOutfit.id)}
             toggleSave={toggleSave}
+            toggleLike={toggleOutfitLike}
             addOutfitToBag={addOutfitToBag}
             onViewItems={() => navigate('items', { outfitId: selectedOutfitId })}
           />
@@ -627,7 +1111,7 @@ function App() {
             service={bagService}
             total={bagTotal}
             orderPlaced={orderPlaced}
-            onPlaceOrder={() => setOrderPlaced(true)}
+            onPlaceOrder={handlePlaceOrder}
             onContinue={() => {
               setOrderPlaced(false);
               setBagItems([]);
@@ -649,23 +1133,39 @@ function App() {
           <CreatorProfile
             creator={selectedCreator}
             posts={getCreatorPosts(selectedCreator.username, creatorPosts)}
+            collections={collectionsByCreator[selectedCreator.id] ?? []}
             followed={followedCreators.includes(selectedCreator.username)}
+            canFollowCollections={Boolean(session)}
+            onRequireAuth={() => requirePhase3Auth('Log in to follow creator collections.')}
             onToggleFollow={toggleCreatorFollow}
+            onFollowCollection={handleCollectionFollow}
             onOpenPost={openPost}
             onOpenCloset={(username) => navigate('closet', { username })}
-            onShop={(postId) => navigate('shop-fit', { postId })}
+            onShop={openShopPost}
           />
         )}
         {route === 'fit-check' && (
           <FitCheckDetail
             post={selectedPost}
             creator={selectedPostCreator}
+            comments={commentsByPost[selectedPost.id] ?? []}
+            commentsLoading={commentsLoading}
+            currentUserId={isSupabaseConfigured ? session?.user?.id : 'demo-user'}
+            isCreatorOwner={isSupabaseConfigured ? Boolean(session?.user?.id && selectedPostCreator.userId === session.user.id) : selectedPostCreator.username === currentCreator.username}
             isSaved={savedPostIds.includes(selectedPost.id)}
+            isLiked={likedPostIds.includes(selectedPost.id)}
             isFollowed={followedCreators.includes(selectedPostCreator.username)}
+            onRequireAuth={() => requirePhase3Auth()}
+            onSubmitComment={handleSubmitComment}
+            onLikeComment={handleLikeComment}
+            onPinComment={handlePinComment}
+            onDeleteComment={handleDeleteComment}
+            onShare={handleSharePost}
             onToggleSave={togglePostSave}
+            onToggleLike={togglePostLike}
             onToggleFollow={toggleCreatorFollow}
             onOpenCreator={openCreator}
-            onShop={(postId) => navigate('shop-fit', { postId })}
+            onShop={openShopPost}
             onRecreate={(postId) => navigate('recreate-fit', { postId })}
           />
         )}
@@ -676,6 +1176,7 @@ function App() {
             isSaved={savedPostIds.includes(selectedPost.id)}
             onToggleSave={togglePostSave}
             onAddAll={addProductsToBag}
+            onProductClick={handleProductClick}
             onRecreate={(postId) => navigate('recreate-fit', { postId })}
           />
         )}
@@ -709,6 +1210,9 @@ function App() {
             onUpload={() => navigate('upload')}
             onDiscover={() => navigate('creators')}
             onEditCreator={() => navigate('creator-settings')}
+            onOpenDashboard={() => navigate('dashboard')}
+            onOpenEarnings={() => navigate('earnings')}
+            onManageCollections={() => navigate('collections')}
             onSignOut={session ? handleSignOut : null}
             isAuthenticated={!isSupabaseConfigured || Boolean(session)}
             onAuthenticate={() => {
@@ -723,6 +1227,41 @@ function App() {
             isSaving={isSavingProfile}
             onSave={handleCreatorProfileSave}
             onCancel={() => navigate('profile')}
+          />
+        )}
+        {route === 'dashboard' && (
+          <CreatorDashboard
+            creator={accountCreator}
+            creators={creatorDirectory}
+            posts={getCreatorPosts(accountCreator.username, creatorPosts)}
+            liveInsights={isSupabaseConfigured ? (creatorInsights ?? { events: [], followers: [], notifications: [] }) : undefined}
+            platformInsights={isSupabaseConfigured ? platformInsights : undefined}
+            insightsLoading={insightsLoading}
+            insightsError={phase3Error}
+            onMarkNotificationsRead={handleMarkNotificationsRead}
+            onOpenPost={openPost}
+            onOpenEarnings={() => navigate('earnings')}
+          />
+        )}
+        {route === 'earnings' && (
+          <CreatorEarnings
+            posts={getCreatorPosts(accountCreator.username, creatorPosts)}
+            liveInsights={isSupabaseConfigured ? (creatorInsights ?? { events: [], followers: [], notifications: [] }) : undefined}
+            onOpenPost={openPost}
+          />
+        )}
+        {route === 'notifications' && (
+          <NotificationsCenter items={notificationItems} onMarkRead={handleMarkNotificationsRead} />
+        )}
+        {route === 'collections' && (
+          <CreatorCollectionsManager
+            collections={collectionsByCreator[accountCreator.id] ?? []}
+            posts={getCreatorPosts(accountCreator.username, creatorPosts)}
+            busy={collectionsBusy}
+            error={phase3Error}
+            onCreate={handleCreateCollection}
+            onSave={handleSaveCollection}
+            onDelete={handleDeleteCollection}
           />
         )}
       </main>
@@ -912,8 +1451,8 @@ function Onboarding({ answers, setAnswers, onComplete }) {
   );
 }
 
-function AppHeader({ route, onBack, onOpenBag, bagCount }) {
-  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators', 'creator-settings'];
+function AppHeader({ route, onBack, onOpenBag, onOpenNotifications, bagCount, unreadNotifications = 0 }) {
+  const detailRoutes = ['detail', 'items', 'bag', 'checkout', 'creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet', 'upload', 'creators', 'creator-settings', 'dashboard', 'earnings', 'collections', 'notifications'];
   const titles = {
     home: '',
     search: 'Search',
@@ -931,6 +1470,10 @@ function AppHeader({ route, onBack, onOpenBag, bagCount }) {
     upload: 'Create',
     profile: 'Profile',
     'creator-settings': 'Edit Creator Profile',
+    dashboard: 'Creator Dashboard',
+    earnings: 'Estimated Earnings',
+    collections: 'Manage Collections',
+    notifications: 'Notifications',
   };
 
   return (
@@ -945,10 +1488,16 @@ function AppHeader({ route, onBack, onOpenBag, bagCount }) {
           <LogoMark compact />
         )}
         {route === 'home' ? <span /> : <h1>{titles[route]}</h1>}
-        <button className="nav-icon-button" onClick={onOpenBag} aria-label={`${bagCount} bag items`} type="button">
-          {route === 'home' ? <Bell size={18} /> : <ShoppingBag size={18} />}
-          {bagCount > 0 && <i>{bagCount}</i>}
-        </button>
+        <div className="app-header-actions">
+          <button className="nav-icon-button" onClick={onOpenNotifications} aria-label={`${unreadNotifications} unread notifications`} type="button">
+            <Bell size={18} />
+            {unreadNotifications > 0 && <i>{unreadNotifications}</i>}
+          </button>
+          <button className="nav-icon-button" onClick={onOpenBag} aria-label={`${bagCount} bag items`} type="button">
+            <ShoppingBag size={18} />
+            {bagCount > 0 && <i>{bagCount}</i>}
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -964,8 +1513,12 @@ function HomeFeed({
   creators,
   followedCreators,
   savedPostIds,
+  likedPostIds,
   toggleCreatorFollow,
   togglePostSave,
+  togglePostLike,
+  likedOutfitIds,
+  toggleOutfitLike,
   openCreator,
   openPost,
   shopPost,
@@ -1006,8 +1559,10 @@ function HomeFeed({
           key={post.id}
           isFollowed={followedCreators.includes(post.creatorUsername)}
           isSaved={savedPostIds.includes(post.id)}
+          isLiked={likedPostIds.includes(post.id)}
           onToggleFollow={toggleCreatorFollow}
           onToggleSave={togglePostSave}
+          onToggleLike={togglePostLike}
           onOpenCreator={openCreator}
           onOpenPost={openPost}
           onShop={shopPost}
@@ -1019,7 +1574,9 @@ function HomeFeed({
           <OutfitCard
             outfit={featured}
             isSaved={savedIds.includes(featured.id)}
+            isLiked={likedOutfitIds.includes(featured.id)}
             toggleSave={toggleSave}
+            toggleLike={toggleOutfitLike}
             openOutfit={openOutfit}
             addOutfitToBag={addOutfitToBag}
             featured
@@ -1029,7 +1586,9 @@ function HomeFeed({
               outfit={outfit}
               key={outfit.id}
               isSaved={savedIds.includes(outfit.id)}
+              isLiked={likedOutfitIds.includes(outfit.id)}
               toggleSave={toggleSave}
+              toggleLike={toggleOutfitLike}
               openOutfit={openOutfit}
               addOutfitToBag={addOutfitToBag}
             />
@@ -1040,23 +1599,23 @@ function HomeFeed({
   );
 }
 
-function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, featured = false }) {
+function OutfitCard({ outfit, isSaved, isLiked, toggleSave, toggleLike, openOutfit, addOutfitToBag, featured = false }) {
   return (
     <article className={featured ? 'outfit-card featured' : 'outfit-card'}>
-      <button className="image-button outfit-image-wrap" onClick={() => openOutfit(outfit.id)} type="button">
+      <div className="image-button outfit-image-wrap" onClick={() => openOutfit(outfit.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') openOutfit(outfit.id); }} role="button" tabIndex="0">
         <img src={outfit.image} alt={`${outfit.title} outfit inspiration`} />
-        <div className="action-rail" aria-hidden="true">
-          <span>
-            <Heart size={18} fill="currentColor" />
-            {outfit.likes}
-          </span>
-          <span>
-            <Bookmark size={18} fill="currentColor" />
-            {outfit.saves}
-          </span>
-          <span>
+        <div className="action-rail">
+          <button className={isLiked ? 'active' : ''} onClick={(event) => { event.stopPropagation(); toggleLike(outfit.id); }} aria-label={isLiked ? 'Unlike outfit' : 'Like outfit'} type="button">
+            <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+            {outfit.likes + (isLiked ? 1 : 0)}
+          </button>
+          <button className={isSaved ? 'active' : ''} onClick={(event) => { event.stopPropagation(); toggleSave(outfit.id); }} aria-label={isSaved ? 'Remove saved outfit' : 'Save outfit'} type="button">
+            <Bookmark size={18} fill={isSaved ? 'currentColor' : 'none'} />
+            {outfit.saves + (isSaved ? 1 : 0)}
+          </button>
+          <button onClick={(event) => { event.stopPropagation(); addOutfitToBag(outfit); }} aria-label="Add outfit to bag" type="button">
             <ShoppingBag size={18} />
-          </span>
+          </button>
         </div>
         <div className="feed-overlay">
           <span className="ai-chip">
@@ -1069,20 +1628,17 @@ function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, f
             ))}
           </div>
         </div>
-      </button>
+      </div>
       <div className="outfit-card-body">
         <div className="outfit-card-title">
           <div>
             <p>{outfit.items.length} items ready to shop</p>
             <h3>{formatPrice(outfit.priceEstimate)}</h3>
           </div>
-          <button
-            className={isSaved ? 'icon-button saved' : 'icon-button'}
-            onClick={() => toggleSave(outfit.id)}
-            aria-label={isSaved ? 'Remove saved outfit' : 'Save outfit'}
-          >
-            <Heart size={19} fill={isSaved ? 'currentColor' : 'none'} />
-          </button>
+          <div className="outfit-engagement-buttons">
+            <button className={isLiked ? 'icon-button liked' : 'icon-button'} onClick={() => toggleLike(outfit.id)} aria-label={isLiked ? 'Unlike outfit' : 'Like outfit'} type="button"><Heart size={19} fill={isLiked ? 'currentColor' : 'none'} /></button>
+            <button className={isSaved ? 'icon-button saved' : 'icon-button'} onClick={() => toggleSave(outfit.id)} aria-label={isSaved ? 'Remove saved outfit' : 'Save outfit'} type="button"><Bookmark size={19} fill={isSaved ? 'currentColor' : 'none'} /></button>
+          </div>
         </div>
         <div className="product-strip">
           {outfit.items.slice(0, 5).map((item) => (
@@ -1102,8 +1658,14 @@ function OutfitCard({ outfit, isSaved, toggleSave, openOutfit, addOutfitToBag, f
   );
 }
 
-function SearchStyles({ openOutfit, onDiscoverCreators }) {
+function SearchStyles({ openOutfit, onDiscoverCreators, onSearch }) {
   const [query, setQuery] = useState('');
+  useEffect(() => {
+    const normalized = query.trim();
+    if (normalized.length < 2) return undefined;
+    const timer = window.setTimeout(() => onSearch?.(normalized, 'typed'), 600);
+    return () => window.clearTimeout(timer);
+  }, [query, onSearch]);
   const filteredOutfits = outfits.filter((outfit) => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return true;
@@ -1134,7 +1696,7 @@ function SearchStyles({ openOutfit, onDiscoverCreators }) {
         </div>
         <div className="chip-row horizontal-scroll">
           {popularSearches.map((search) => (
-            <button className="chip" key={search} onClick={() => setQuery(search)} type="button">
+            <button className="chip" key={search} onClick={() => { setQuery(search); onSearch?.(search, 'popular'); }} type="button">
               {search}
             </button>
           ))}
@@ -1149,7 +1711,7 @@ function SearchStyles({ openOutfit, onDiscoverCreators }) {
             <button
               className="style-card"
               key={style.id}
-              onClick={() => setQuery(style.title)}
+              onClick={() => { setQuery(style.title); onSearch?.(style.title, 'style-world'); }}
               type="button"
             >
               <img src={style.image} alt={`${style.title} style`} />
@@ -1250,7 +1812,7 @@ function SavedOutfits({ savedOutfits, openOutfit, toggleSave, savedPosts, openPo
   );
 }
 
-function OutfitDetail({ outfit, isSaved, toggleSave, addOutfitToBag, onViewItems }) {
+function OutfitDetail({ outfit, isSaved, isLiked, toggleSave, toggleLike, addOutfitToBag, onViewItems }) {
   return (
     <article className="detail-page">
       <img className="detail-hero" src={outfit.image} alt={`${outfit.title} outfit`} />
@@ -1260,13 +1822,10 @@ function OutfitDetail({ outfit, isSaved, toggleSave, addOutfitToBag, onViewItems
             <p className="eyebrow">{outfit.creator}</p>
             <h2>{outfit.title}</h2>
           </div>
-          <button
-            className={isSaved ? 'icon-button saved' : 'icon-button'}
-            onClick={() => toggleSave(outfit.id)}
-            aria-label={isSaved ? 'Remove saved outfit' : 'Save outfit'}
-          >
-            <Heart size={20} fill={isSaved ? 'currentColor' : 'none'} />
-          </button>
+          <div className="outfit-engagement-buttons">
+            <button className={isLiked ? 'icon-button liked' : 'icon-button'} onClick={() => toggleLike(outfit.id)} aria-label={isLiked ? 'Unlike outfit' : 'Like outfit'} type="button"><Heart size={20} fill={isLiked ? 'currentColor' : 'none'} /></button>
+            <button className={isSaved ? 'icon-button saved' : 'icon-button'} onClick={() => toggleSave(outfit.id)} aria-label={isSaved ? 'Remove saved outfit' : 'Save outfit'} type="button"><Bookmark size={20} fill={isSaved ? 'currentColor' : 'none'} /></button>
+          </div>
         </div>
         <p className="detail-copy">{outfit.description}</p>
         <div className="tag-row">
@@ -1284,7 +1843,7 @@ function OutfitDetail({ outfit, isSaved, toggleSave, addOutfitToBag, onViewItems
             Items
           </span>
           <span>
-            <strong>{outfit.likes}</strong>
+            <strong>{outfit.likes + (isLiked ? 1 : 0)}</strong>
             Likes
           </span>
         </div>
@@ -1657,7 +2216,7 @@ function BottomNav({ route, navigate }) {
   ];
   const activeRoute = route === 'creators' ? 'search'
     : ['creator', 'fit-check', 'shop-fit', 'recreate-fit', 'closet'].includes(route) ? 'home'
-      : route === 'creator-settings' ? 'profile' : route;
+      : ['creator-settings', 'dashboard', 'earnings', 'collections', 'notifications'].includes(route) ? 'profile' : route;
 
   return (
     <nav className="bottom-nav" aria-label="Primary">

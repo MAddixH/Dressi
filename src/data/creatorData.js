@@ -28,6 +28,7 @@ export const creators = [
     outfitPosts: 85,
     likes: 241000,
     saves: 48300,
+    purchases: 1294,
     status: 'Trending',
     verified: true,
   },
@@ -46,6 +47,7 @@ export const creators = [
     outfitPosts: 132,
     likes: 418000,
     saves: 92100,
+    purchases: 2380,
     status: 'Most Saved',
     verified: true,
   },
@@ -64,6 +66,7 @@ export const creators = [
     outfitPosts: 104,
     likes: 362000,
     saves: 67700,
+    purchases: 3120,
     status: 'Most Purchased',
     verified: false,
   },
@@ -82,6 +85,7 @@ export const creators = [
     outfitPosts: 47,
     likes: 126000,
     saves: 28400,
+    purchases: 684,
     status: 'New',
     verified: true,
   },
@@ -227,6 +231,29 @@ export const creatorPosts = [
   },
 ];
 
+export const demoCommentsByPost = {
+  'spring-city-fit': [
+    {
+      id: 'comment-demo-1', postId: 'spring-city-fit', userId: 'demo-maya', parentId: null,
+      comment: 'The navy knit with those trousers is exactly the balance I was looking for.',
+      pinned: true, createdAt: new Date(Date.now() - 42 * 60000).toISOString(),
+      authorName: 'Maya Brooks', authorAvatar: creators[1].avatar, likes: 38, likedByMe: false,
+    },
+    {
+      id: 'comment-demo-2', postId: 'spring-city-fit', userId: 'demo-noah', parentId: null,
+      comment: 'Would this work with a darker loafer too?',
+      pinned: false, createdAt: new Date(Date.now() - 25 * 60000).toISOString(),
+      authorName: 'Noah Chen', authorAvatar: creators[2].avatar, likes: 12, likedByMe: false,
+    },
+    {
+      id: 'comment-demo-3', postId: 'spring-city-fit', userId: 'creator-jake', parentId: 'comment-demo-2',
+      comment: 'Absolutely. Dark brown keeps the same feel and adds a little more contrast.',
+      pinned: false, createdAt: new Date(Date.now() - 18 * 60000).toISOString(),
+      authorName: 'Jake Morrison', authorAvatar: creators[0].avatar, likes: 19, likedByMe: false,
+    },
+  ],
+};
+
 export const currentCreator = {
   id: 'creator-morgan',
   username: 'morganstyles',
@@ -242,6 +269,7 @@ export const currentCreator = {
   outfitPosts: 0,
   likes: 0,
   saves: 0,
+  purchases: 0,
   status: 'New',
   verified: false,
 };
