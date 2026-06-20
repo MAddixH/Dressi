@@ -7,6 +7,7 @@ import {
   Check,
   ChevronRight,
   ExternalLink,
+  DollarSign,
   Heart,
   ImagePlus,
   Layers3,
@@ -61,8 +62,10 @@ export function CreatorFeedCard({
   creator,
   isFollowed,
   isSaved,
+  isLiked,
   onToggleFollow,
   onToggleSave,
+  onToggleLike,
   onOpenCreator,
   onOpenPost,
   onShop,
@@ -92,12 +95,9 @@ export function CreatorFeedCard({
       </button>
       <div className="creator-card-content">
         <div className="social-actions">
-          <span><Heart size={18} /> {compact(post.likes)}</span>
-          <span><Bookmark size={18} /> {compact(post.saves)}</span>
-          <span><MessageCircle size={18} /> {compact(post.comments)}</span>
-          <button className={isSaved ? 'saved' : ''} onClick={() => onToggleSave(post.id)} aria-label="Save fit check" type="button">
-            <Bookmark size={19} fill={isSaved ? 'currentColor' : 'none'} />
-          </button>
+          <button className={isLiked ? 'stat-action liked' : 'stat-action'} onClick={() => onToggleLike(post.id)} aria-label={isLiked ? 'Unlike fit check' : 'Like fit check'} type="button"><Heart size={18} fill={isLiked ? 'currentColor' : 'none'} /> {compact(Math.max(post.likes, isLiked ? 1 : 0))}</button>
+          <button className={isSaved ? 'stat-action saved' : 'stat-action'} onClick={() => onToggleSave(post.id)} aria-label={isSaved ? 'Remove saved fit check' : 'Save fit check'} type="button"><Bookmark size={18} fill={isSaved ? 'currentColor' : 'none'} /> {compact(post.saves)}</button>
+          <button className="comment-action" onClick={() => onOpenPost(post.id)} type="button"><MessageCircle size={18} /> {compact(post.comments)}</button>
         </div>
         <p><strong>@{creator.username}</strong> {post.caption}</p>
         <div className="tag-row creator-tags">
@@ -234,7 +234,7 @@ export function CreatorProfile({ creator, posts, collections = [], followed, can
   );
 }
 
-export function FitCheckDetail({ post, creator, comments = [], commentsLoading = false, currentUserId, isCreatorOwner, isSaved, isFollowed, onRequireAuth, onSubmitComment, onLikeComment, onPinComment, onDeleteComment, onShare, onToggleSave, onToggleFollow, onOpenCreator, onShop, onRecreate }) {
+export function FitCheckDetail({ post, creator, comments = [], commentsLoading = false, currentUserId, isCreatorOwner, isSaved, isLiked, isFollowed, onRequireAuth, onSubmitComment, onLikeComment, onPinComment, onDeleteComment, onShare, onToggleSave, onToggleLike, onToggleFollow, onOpenCreator, onShop, onRecreate }) {
   return (
     <article className="fit-check-detail">
       <section className="fit-check-media">
@@ -266,10 +266,9 @@ export function FitCheckDetail({ post, creator, comments = [], commentsLoading =
           <span><small>Category</small><strong>{post.genderCategory}</strong></span>
         </div>
         <div className="social-actions detail-social">
-          <span><Heart size={18} /> {compact(post.likes)}</span>
-          <span><Bookmark size={18} /> {compact(post.saves)}</span>
+          <button className={isLiked ? 'stat-action liked' : 'stat-action'} onClick={() => onToggleLike(post.id)} type="button"><Heart size={18} fill={isLiked ? 'currentColor' : 'none'} /> {compact(Math.max(post.likes, isLiked ? 1 : 0))}</button>
+          <button className={isSaved ? 'stat-action saved' : 'stat-action'} onClick={() => onToggleSave(post.id)} type="button"><Bookmark size={18} fill={isSaved ? 'currentColor' : 'none'} /> {compact(post.saves)}</button>
           <span><MessageCircle size={18} /> {compact(comments.length || post.comments)}</span>
-          <button className={isSaved ? 'saved' : ''} onClick={() => onToggleSave(post.id)} type="button"><Bookmark size={19} fill={isSaved ? 'currentColor' : 'none'} /></button>
           <button onClick={onShare} type="button" aria-label="Share fit"><Share2 size={19} /></button>
         </div>
         <TaggedProductPreview products={post.products} />
@@ -533,7 +532,7 @@ export function CreatorUpload({ creator, accountType, isPublishing = false, onUp
   );
 }
 
-export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onEditCreator, onOpenDashboard, onManageCollections, onSignOut, isAuthenticated = true, onAuthenticate }) {
+export function AccountProfile({ accountType, creator, followedCount, onUpgrade, onOpenCreator, onUpload, onDiscover, onEditCreator, onOpenDashboard, onOpenEarnings, onManageCollections, onSignOut, isAuthenticated = true, onAuthenticate }) {
   if (!isAuthenticated) {
     return (
       <section className="guest-account">
@@ -556,6 +555,7 @@ export function AccountProfile({ accountType, creator, followedCount, onUpgrade,
       {accountType === 'creator' ? (
         <section className="profile-command-list">
           <button onClick={onOpenDashboard} type="button"><BarChart3 size={19} /><span><strong>Creator dashboard</strong><small>Track reach, growth, saves, and product clicks</small></span><ChevronRight size={18} /></button>
+          <button onClick={onOpenEarnings} type="button"><DollarSign size={19} /><span><strong>Estimated earnings</strong><small>See purchase attribution and top earning fits</small></span><ChevronRight size={18} /></button>
           <button onClick={onManageCollections} type="button"><Layers3 size={19} /><span><strong>Manage collections</strong><small>Group fits into followable style edits</small></span><ChevronRight size={18} /></button>
           <button onClick={() => onOpenCreator(creator.username)} type="button"><Users size={19} /><span><strong>View creator profile</strong><small>See your public profile and posts</small></span><ChevronRight size={18} /></button>
           <button onClick={onEditCreator} type="button"><UserPlus size={19} /><span><strong>Edit creator profile</strong><small>Update your username, bio, photo, and links</small></span><ChevronRight size={18} /></button>

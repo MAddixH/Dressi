@@ -9,6 +9,8 @@ const baseSummary = {
   collectionFollows: 920,
   comments: 1846,
   shares: 6230,
+  purchases: 1294,
+  estimatedEarnings: 2843.21,
 };
 
 const rangeConfig = {
@@ -19,7 +21,16 @@ const rangeConfig = {
   Custom: { factor: 1.38, labels: ['Start', 'Wk 1', 'Wk 2', 'Wk 3', 'Wk 4', 'Wk 5', 'Wk 6', 'End'], curve: [0.28, 0.35, 0.43, 0.51, 0.49, 0.69, 0.82, 1] },
 };
 
-const metricRates = { views: 51000, saves: 7600, clicks: 2200, follows: 510, comments: 380, shares: 940 };
+const metricRates = { views: 51000, saves: 7600, clicks: 2200, follows: 510, comments: 380, shares: 940, purchases: 240, earnings: 520 };
+
+// MVP estimate only: Dressi has no checkout attribution yet. This converts
+// high-intent actions into a conservative directional earnings estimate.
+export function getEstimatedEarnings(summary) {
+  if (Number(summary?.estimatedEarnings) > 0) return Number(summary.estimatedEarnings);
+  const clicks = Number(summary?.productClicks ?? 0);
+  const saves = Number(summary?.saves ?? 0);
+  return Math.round((clicks * 0.16 + saves * 0.012) * 100) / 100;
+}
 
 export const analyticsRanges = Object.keys(rangeConfig);
 export const chartMetrics = [
@@ -29,6 +40,8 @@ export const chartMetrics = [
   { id: 'follows', label: 'Follows' },
   { id: 'comments', label: 'Comments' },
   { id: 'shares', label: 'Shares' },
+  { id: 'purchases', label: 'Purchases' },
+  { id: 'earnings', label: 'Earnings' },
 ];
 
 function dateWindow(range, customRange = {}) {
@@ -67,6 +80,20 @@ function cumulativeSeries(rows, labels, start, end) {
   }, []);
 }
 
+function cumulativeValueSeries(rows, labels, start, end) {
+  const buckets = Array.from({ length: labels.length }, () => 0);
+  const duration = Math.max(end.getTime() - start.getTime(), 1);
+  rows.forEach((row) => {
+    const progress = (new Date(row.created_at).getTime() - start.getTime()) / duration;
+    const index = Math.max(0, Math.min(labels.length - 1, Math.floor(progress * labels.length)));
+    buckets[index] += Number(row.event_value ?? 0);
+  });
+  return buckets.reduce((series, value, index) => {
+    series.push(Math.round((value + (series[index - 1] ?? 0)) * 100) / 100);
+    return series;
+  }, []);
+}
+
 export function getAnalyticsForRange(range, liveInsights = null, customRange = {}) {
   const config = rangeConfig[range] ?? rangeConfig['30 Days'];
   if (liveInsights) {
@@ -74,6 +101,7 @@ export function getAnalyticsForRange(range, liveInsights = null, customRange = {
     const events = rowsInWindow(liveInsights.events, start, end);
     const count = (type) => events.filter((event) => event.event_type === type).length;
     const postViews = count('post_view');
+    const purchaseEvents = events.filter((event) => event.event_type === 'purchase');
     const seriesFor = (types) => cumulativeSeries(events.filter((event) => types.includes(event.event_type)), config.labels, start, end);
     return {
       ...config,
@@ -90,6 +118,8 @@ export function getAnalyticsForRange(range, liveInsights = null, customRange = {
         collectionFollows: count('collection_follow'),
         comments: count('comment'),
         shares: count('share'),
+        purchases: purchaseEvents.length,
+        estimatedEarnings: purchaseEvents.reduce((sum, event) => sum + Number(event.event_value ?? 0), 0),
       },
       series: {
         views: seriesFor(['profile_view', 'post_view']),
@@ -98,6 +128,8 @@ export function getAnalyticsForRange(range, liveInsights = null, customRange = {
         follows: seriesFor(['follow']),
         comments: seriesFor(['comment']),
         shares: seriesFor(['share']),
+        purchases: seriesFor(['purchase']),
+        earnings: cumulativeValueSeries(purchaseEvents, config.labels, start, end),
       },
     };
   }
@@ -118,33 +150,38 @@ export function getOutfitPerformance(posts, liveInsights = null) {
     return posts.map((post) => {
       const postEvents = events.filter((event) => event.post_id === post.id);
       const count = (type) => postEvents.filter((event) => event.event_type === type).length;
-      return { id: post.id, title: post.title, image: post.image, views: count('post_view'), saves: count('save'), shares: count('share'), clicks: count('product_click'), comments: count('comment') };
+      const clicks = count('product_click');
+      const saves = count('save');
+      const purchases = count('purchase');
+      const attributedEarnings = postEvents.filter((event) => event.event_type === 'purchase').reduce((sum, event) => sum + Number(event.event_value ?? 0), 0);
+      return { id: post.id, title: post.title, image: post.image, views: count('post_view'), saves, shares: count('share'), clicks, purchases, conversionRate: clicks ? (purchases / clicks) * 100 : 0, comments: count('comment'), estimatedEarnings: attributedEarnings || Math.round((clicks * 0.16 + saves * 0.012) * 100) / 100 };
     }).sort((a, b) => b.views - a.views || b.saves - a.saves);
   }
   const fallback = posts[0];
   return outfitSeeds.map((seed, index) => {
     const post = posts.find((item) => item.id === seed.id) ?? posts[index] ?? fallback;
-    return { ...seed, id: post?.id ?? seed.id, title: post?.title ?? seed.title, image: post?.image ?? seed.image };
+    const purchases = [84, 63, 51][index] ?? 0;
+    return { ...seed, id: post?.id ?? seed.id, title: post?.title ?? seed.title, image: post?.image ?? seed.image, purchases, conversionRate: (purchases / seed.clicks) * 100, estimatedEarnings: Math.round((seed.clicks * 0.16 + seed.saves * 0.012) * 100) / 100 };
   });
 }
 
 export const productPerformance = [
-  { id: 'creator-tods-suede', brand: "Tod's", name: 'Suede Loafers', clicks: 1320 },
-  { id: 'creator-rl-knit', brand: 'Ralph Lauren', name: 'Pima Cotton Sweater', clicks: 1184 },
-  { id: 'creator-md-pleat', brand: 'Massimo Dutti', name: 'Pleated Trousers', clicks: 946 },
-  { id: 'creator-persol', brand: 'Persol', name: 'PO0714 Sunglasses', clicks: 721 },
+  { id: 'creator-tods-suede', brand: "Tod's", name: 'Suede Loafers', clicks: 1320, purchases: 89 },
+  { id: 'creator-rl-knit', brand: 'Ralph Lauren', name: 'Pima Cotton Sweater', clicks: 1184, purchases: 76 },
+  { id: 'creator-md-pleat', brand: 'Massimo Dutti', name: 'Pleated Trousers', clicks: 946, purchases: 64 },
+  { id: 'creator-persol', brand: 'Persol', name: 'PO0714 Sunglasses', clicks: 721, purchases: 43 },
 ];
 
 export function getProductPerformance(posts, liveInsights = null) {
-  if (!liveInsights) return productPerformance;
+  if (!liveInsights) return productPerformance.map((product) => ({ ...product, conversionRate: (product.purchases / product.clicks) * 100, estimatedEarnings: Math.round(product.purchases * 2.2 * 100) / 100 }));
   const products = posts.flatMap((post) => post.products.map((product) => ({ ...product, postId: post.id })));
   const uniqueProducts = [...new Map(products.map((product) => [product.id, product])).values()];
-  return uniqueProducts.map((product) => ({
-    id: product.id,
-    brand: product.brand,
-    name: product.name,
-    clicks: (liveInsights.events ?? []).filter((event) => event.product_id === product.id && event.event_type === 'product_click').length,
-  })).sort((a, b) => b.clicks - a.clicks);
+  return uniqueProducts.map((product) => {
+    const productEvents = (liveInsights.events ?? []).filter((event) => event.product_id === product.id);
+    const clicks = productEvents.filter((event) => event.event_type === 'product_click').length;
+    const purchases = productEvents.filter((event) => event.event_type === 'purchase');
+    return { id: product.id, brand: product.brand, name: product.name, clicks, purchases: purchases.length, conversionRate: clicks ? (purchases.length / clicks) * 100 : 0, estimatedEarnings: purchases.reduce((sum, event) => sum + Number(event.event_value ?? 0), 0) };
+  }).sort((a, b) => b.purchases - a.purchases || b.clicks - a.clicks);
 }
 
 export const followerInsights = { total: 12400, newFollowers: 2840, unfollows: 186, netGrowth: 2654, labels: ['May 21', 'May 28', 'Jun 4', 'Jun 11', 'Jun 18'], values: [9746, 10290, 10840, 11620, 12400] };

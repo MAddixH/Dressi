@@ -16,7 +16,9 @@ Open the project's SQL Editor and run these files in order:
 
 `supabase/migrations/202606190001_phase_3_creator_engagement.sql`
 
-The first migration creates the Phase 2 tables, row-level security policies, signup trigger, and public `creator-media` storage bucket. The second stores Dressi's curated creator catalog in Supabase so follows and saves use persistent IDs. The Phase 3 migration adds live engagement events, comments, comment likes, notifications, and followable creator collections. Financial metrics are intentionally excluded until checkout attribution has a product plan.
+`supabase/migrations/202606200001_phase_3_growth_engine.sql`
+
+The first migration creates the Phase 2 tables, row-level security policies, signup trigger, and public `creator-media` storage bucket. The second stores Dressi's curated creator catalog in Supabase so follows and saves use persistent IDs. The first Phase 3 migration adds live creator engagement, comments, comment likes, notifications, and followable creator collections. The growth-engine migration adds daily creator rollups, privacy-scoped platform events, sessions, retention, search demand, and aggregate platform analytics. Estimated earnings in the app are directional MVP calculations until checkout attribution is available.
 
 ## 3. Configure the app
 
